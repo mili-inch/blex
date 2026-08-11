@@ -32,28 +32,22 @@ my-extension/
         └── extensions/
 ```
 
-## 3. States
-
-以下の情報を、`pyproject.toml`とは独立したファイルで保持する。
-- 開発対象Blenderの情報
-
-
-- 開発対象Blenderのパス
-
-- 実行対象Blenderのパス (optional)
-
-
-## 4. Commands
+## 3. Commands
 
 ### blex init
 
-現在のディレクトリや、指定したディレクトリに対してblexに必要な情報を初期化する。
+```bash
+blex init [DIRECTORY] [OPTIONS]
+```
+
+ディレクトリに対してblexに必要な情報を初期化する。
 
 CLIのインターフェースはuv initを基準に合わせる。
+ディレクトリが未指定の場合、現在のディレクトリに初期化を行う。
 
 対象となるディレクトリに既に`pyproject.toml`や`blender_manifest.toml`が存在した場合は、なるべく既存の構造を破壊することなく必要なフィールドを追加する。
 
-CLIによる対話的な設定機能を持つ。また、対話モード時の機能と対応する、非対話的な設定オプションも持つ。
+CLIによる対話的な設定機能を持つ。また、対話モード時の機能と対応する、非対話的な設定も可能とする。
 
 以下のような機能を持つ。
 
@@ -68,10 +62,12 @@ CLIによる対話的な設定機能を持つ。また、対話モード時の�
 - `pyproject.toml`の初期化
 - `blender_manifest.toml`の生成
 
-
 #### blex build
 #### blex dev
 
-動作対象のBlenderは複数のバージョンを想定することがあるため、特定のPython環境を想定するべきではない。
-そのため、`pyproject.toml`とは独立して、対象となるBlenderの情報をファイルに保持する。
-blexが扱う状態は以下とする。
+
+Blenderのパスを指定して保持する機能と
+BlenderからPythonバージョン情報を捕捉する機能
+Pythonバージョンを保持する機能
+は作って
+devやbuildはPythonバージョンとBlenderパスを引数として実行するようにして、設定されている場合はそれを用いるように

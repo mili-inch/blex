@@ -2,16 +2,6 @@
 
 ## 1. 概要
 
-### 1.1 名称
-
-CLIおよびPythonパッケージの名称を **BLEX** とする。
-
-実行コマンドは以下とする。
-
-```bash
-blex
-```
-
 ### 1.2 目的
 
 BLEXは、Blender Extension開発に必要な以下の処理を統合するPython製CLIである。
@@ -56,6 +46,7 @@ schema-version = 1
 source-dir = "extension"
 dist-dir = "dist"
 runtime-dependency-group = "blender-runtime"
+environment-path = "./.blex/environment"
 
 [tool.blex.target]
 blender-version = "4.5"
@@ -65,12 +56,6 @@ python-abi = "cp311"
 [tool.blex.stubs]
 provider = "fake-bpy-module"
 blender-version = "4.5"
-
-[tool.blex.environment]
-config = "clean"
-scripts = "clone"
-datafiles = "clean"
-extensions = "clone"
 
 [tool.blex.build]
 bundle-wheels = true
@@ -98,29 +83,14 @@ BLEX固有設定はすべて`tool.blex`以下へ保存する。
 Blenderをbackground起動し、以下を取得する。
 
 - Blenderバージョン
-- Blender Extension API情報
 - Blender内部Pythonのバージョン
 - Python ABI
 - OS
 - CPUアーキテクチャ
-- CONFIGの通常ユーザーパス
-- SCRIPTSの通常ユーザーパス
-- DATAFILESの通常ユーザーパス
-- EXTENSIONSの通常ユーザーパス
 
 取得結果は診断およびキャッシュのため`.bext/state.toml`へ保存できる。
 
 `.bext/state.toml`は環境構築の原本として使用しない。
-
-## 6.3 非対話モード
-
-以下のオプションをサポートする。
-
-```text
---no-input
-```
-
-必須情報が不足している場合は推測せずエラーとする。
 
 # 7. `blex create`
 
@@ -249,23 +219,6 @@ blender-python-stubs
 dev = [
     "fake-bpy-module-4.5",
 ]
-```
-
-対象Blenderに対応するパッケージが存在しない場合はエラーとする。
-
----
-
-# 11. Blenderユーザー環境
-
-## 11.1 対象リソース
-
-以下を個別に管理する。
-
-```text
-CONFIG
-SCRIPTS
-DATAFILES
-EXTENSIONS
 ```
 
 ---
@@ -583,20 +536,6 @@ blex dev --debug --wait-for-client
 
 # 24. Reload Panel
 
-## 24.1 既定動作
-
-Reload Panelは既定で有効とする。
-
-```bash
-blex dev
-```
-
-無効化:
-
-```bash
-blex dev --without-reload-panel
-```
-
 ## 24.2 実装方式
 
 Blender起動時に実行されるbootstrap scriptが、operatorとpanelを直接登録する。
@@ -609,50 +548,6 @@ BLEX_OT_restart_blender
 BLEX_PT_development
 ```
 
-これらは以下へ含めない。
-
-- `blender_manifest.toml`
-- Blender PreferencesのExtension一覧
-- Primary Extensionの`register()`
-
-## 24.3 Panel内容
-
-```text
-Extension Development
-├── Primary Extension status
-├── Supplemental Extension status
-├── Wheel status
-├── Debugger status
-├── Reload Extension
-└── Restart Blender
-```
-
-## 24.4 Reload処理
-
-1. Primary Extensionを無効化する。
-2. `unregister()`を実行する。
-3. 対象namespace以下を`sys.modules`から削除する。
-4. import cacheを無効化する。
-5. source overlayを再同期する。
-6. current platform向けwheelを検査する。
-7. Primary Extensionを再importする。
-8. Primary Extensionを有効化する。
-9. 成否をPanelへ表示する。
-
-Supplemental Extensionはリロード対象外とする。
-
-native wheelが変更された場合はReloadを中止し、Restart Blenderを要求する。
-
-## 24.5 Restart処理
-
-1. session directoryへrestart requestを保存する。
-2. Blenderを終了する。
-3. 親`blex dev`プロセスがrequestを検出する。
-4. overlayとwheelを再生成する。
-5. 同じ宣言済み環境でBlenderを再起動する。
-
----
-
 # 26. エラー条件
 
 以下をエラーとする。
@@ -661,15 +556,8 @@ native wheelが変更された場合はReloadを中止し、Restart Blenderを�
 - Blender Probeに失敗する
 - Blender内部PythonとPython要件が不整合
 - 対象Blender用の型スタブが存在しない
-- `uv.lock`が`pyproject.toml`と不整合
-- `blex.lock`がSupplemental Extension宣言と不整合
-- Supplemental Extension ZIPのmanifestが不正
-- archiveのSHA-256がlockと異なる
-- Primary ExtensionとSupplemental ExtensionのIDが競合
-- cloneされたExtensionとの未解決ID競合
 - 要求platform向けwheelが存在しない
 - source manifestのplatform制約外をbuild対象に指定
-- `--wait-for-client`を`--debug`なしで指定
 - offline syncに必要なartifactが不足している
 - staging環境のBlender検証に失敗する
 
@@ -688,19 +576,3 @@ native wheelが変更された場合はReloadを中止し、Restart Blenderを�
 - 自動ファイル監視による即時reload
 - 複数Blenderバージョンを同時対象とするbuild matrix
 - clone元ユーザーリソースのスナップショット保持
-
----
-
-# 28. コマンド動作一覧
-
-| コマンド                              | 期待される結果                                |
-| --------------------------------- | -------------------------------------- |
-| `blex create`                     | 新規Extension、uv環境、型スタブ、宣言済みBlender環境を生成 |
-| `blex init`                       | 既存プロジェクトを非破壊でBLEXプロジェクト化               |
-| `blex sync`                       | 現在の宣言とlockからBlender環境全体を同期・修復          |
-| `blex build`                      | current platform向けwheel同梱ZIPを生成        |
-| `blex build --all-platforms`      | 対応wheelが存在する全target向けZIPを生成            |
-| `blex build --without-wheels`     | wheelを含まないZIPを生成                       |
-| `blex dev`                        | 宣言済み環境を同期し、Reload Panel付きでBlenderを起動   |
-| `blex dev --debug`                | Blender内部でdebugpy serverを起動            |
-| `blex dev --without-reload-panel` | Reload用operatorおよびpanelを登録せず起動         |
