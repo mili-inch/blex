@@ -38,7 +38,7 @@ blex init [DIRECTORY] [OPTIONS]
 
 ディレクトリに対してblexと開発Blender Extensionに必要な情報を初期化する。
 主に記述するのは`pyproject.toml`と`blender_manifest.toml`である。
-想定しているパスにおいて既に`pyproject.toml`や`blender_manifest.toml`が存在した場合、なるべく既存の構造を破壊することなく必要なフィールドを追加する。
+対象ディレクトリが既に存在する場合はデフォルトでエラーとする。強制オプションが明示された場合に限り、既存の構造や値を変更せず、不足するフィールドとファイルのみを追加する。
 
 CLIのインターフェースはuv initを基準に合わせる。
 ディレクトリはOptionalであり、未指定の場合現在のディレクトリに初期化を行う。
@@ -51,13 +51,14 @@ CLIのインターフェースはuv initを基準に合わせる。
 ちなみに、このPythonバージョンはあくまで開発中に想定するPythonのバージョンを指定するものであり、後述のWheel取得などで用いるPythonバージョンとは別である。
 
 `blex init`のオプションを用いて、この指定するPythonバージョンを上書きすることができる。
-以下の指定方法を持ち、複数方法で指定された場合はエラーとする。
+以下の指定方法を持つ。両方が同時に指定された場合は、Pythonバージョンの直接指定を優先する。
 
 - Pythonバージョンを直で指定するもの
 - Blenderの実行バイナリパスを指定し、ランタイムを元にPythonバージョンを決定するもの
 
 プロジェクト名はデフォルトでディレクトリ名として、オプションを通して名前を設定出来るものとする。
 オプション名は`--name`とする。
+ソース位置は`--source-dir`で指定でき、デフォルトは`src/<manifest-id>`とする。
 バージョンはデフォルトで`0.1.0`とする。
 authorsはデフォルトではプレースホルダとする。
 descriptionはオプションで与えられる。デフォルトは`Add your description here`とする。
@@ -175,11 +176,11 @@ blex dev [DIRECTORY] [OPTIONS]
 blenderの起動時スクリプトを指定することにより、当該ExtensionのReloadを行うPanelを追加する機能を持つ。この機能はオプションで無効化できる。
 Reload Panelは、Blender起動時に実行されるbootstrap scriptによってoperatorとpanelの形でExtensionによらず直接登録される。
 
-また、Blender内Pythonでdebugpyによるデバッグサーバーを起動する機能を有する。この機能はオプションで無効化できる。
-debugpyの導入は、必要になった時にCLIに同梱したUniversal Wheelのdebugpyを`.blex/debugpy/1.8.x`のようなディレクトリにzipfileを用いて展開する。
+また、Blender内Pythonでdebugpyによるデバッグサーバーを起動する機能を有する。この機能はデフォルトで無効とし、オプションで明示的に有効化する。
+debugpyの導入は、必要になった時にCLIに同梱したUniversal Wheelのdebugpy 1.8.21を`.blex/debugpy/1.8.21`ディレクトリにzipfileを用いて展開する。
 そして、Blenderの起動スクリプトにおいてそのディレクトリを sys.path に追加する方式で行う。
 
-オプションとして、Blender起動時に環境変数で渡される、Blenderのユーザー領域ディレクトリを指定することができる。
+オプションとして、Blender起動時に`BLENDER_USER_RESOURCES`環境変数で渡される、Blenderのユーザー領域ディレクトリを指定することができる。
 指定されたディレクトリは直接参照されるのではなく、`blex dev`起動時に毎回複製され、起動されるたび同じ初期状態を保つ。
 指定がない場合は`.blex`以下に空ディレクトリとして作成される。
 extensionは、デフォルトではそのユーザー領域ディレクトリ中の`extensions/user_default`以下に開発中ファイルをリンクされることによってBlenderに認識される。
@@ -200,11 +201,7 @@ Windows:
 
 Blender ExtensionのWheel対応に則り、`blex dev`実行時にwheelを集め、環境にリンクする機能を持つ。これはオプションで無効化できる。
 起動時、pyproject.tomlにおける`project.dependencies`の記述を元に、必要なwheelを自動的に集める。
-このとき想定するPythonのバージョンは環境のPythonバージョンとは別にオプションで指定することができるものとする。
-この際のバージョン指定方法として、以下を想定する。
-
-- Pythonバージョンを直で指定するもの
-- Blenderの実行バイナリパスを指定し、ランタイムを元にPythonバージョンを決定するもの
+このとき想定するPythonのバージョンは環境のPythonバージョンとは別にオプションで直接指定できる。指定がない場合は`.python-version`を使用する。Blenderの実行バイナリからのPythonバージョン検出は行わない。
 
 収集したWheelの実体は`.blex`ディレクトリ以下にキャッシュされ、`blex dev`実行時はリンクで配置される。
 
@@ -239,15 +236,11 @@ Blender ExtensionのWheel対応に則り、`blex dev`実行時にwheelを集め�
 blex build [DIRECTORY] [OPTIONS]
 ```
 
-ビルドはBlender標準のコマンドで行うものとし、Wheelの収集や`blender_manifest.toml`への追記と各バージョン向けビルド用ディレクトリの作成までを行う。
+ビルドはWheelの収集、`blender_manifest.toml`への追記、および各Pythonバージョン向けビルド用ディレクトリの作成までを行う。Blender標準のExtension buildコマンドは実行せず、stagingディレクトリは保持する。
 
 `blex dev`と同様のロジックでWheelを収集する。これはオプションで無効化できる。
 起動時、pyproject.tomlにおける`project.dependencies`の記述を元に、必要なwheelを自動的に集める。
-このとき想定するPythonのバージョンは環境のPythonバージョンとは別にオプションで指定することができるものとする。
-この際のバージョン指定方法として、以下を想定する。
-
-- Pythonバージョンを直で指定するもの
-- Blenderの実行バイナリパスを指定し、ランタイムを元にPythonバージョンを決定するもの
+このとき想定するPythonのバージョンは環境のPythonバージョンとは別にオプションで直接指定できる。指定がない場合は`.python-version`を使用する。Blenderの実行バイナリからのPythonバージョン検出は行わない。
 
 Pythonバージョンは複数指定可能として、複数の場合はその分のディレクトリをそれぞれ作成しソースも複製して格納する。
 
