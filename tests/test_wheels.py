@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import shutil
@@ -182,6 +183,8 @@ def test_pip_executable_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     executable = tmp_path / "tools" / "pip.exe"
     executable.parent.mkdir()
     executable.write_bytes(b"pip")
+    if os.name != "nt":
+        executable.chmod(0o755)
     assert pip_adapter.resolve_pip_executable("tools/pip.exe", tmp_path) == executable
 
     monkeypatch.setattr(pip_adapter.shutil, "which", lambda _value: str(executable))
@@ -202,6 +205,22 @@ def test_pip_executable_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         pip_adapter.resolve_pip_executable("C:", tmp_path)
     with pytest.raises(BlexError, match="regular file"):
         pip_adapter.resolve_pip_executable("tools/", tmp_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are not available")
+def test_non_executable_pip_file_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "pip"
+    executable.write_bytes(b"pip")
+    executable.chmod(0o644)
+
+    with pytest.raises(BlexError, match="not executable"):
+        pip_adapter.resolve_pip_executable(str(executable), tmp_path)
+
+    monkeypatch.setattr(pip_adapter.shutil, "which", lambda _value: str(executable))
+    with pytest.raises(BlexError, match="not executable"):
+        pip_adapter.resolve_pip_executable("fake-pip", tmp_path)
 
 
 def test_pip_version_success_verbose_and_execution_error(
