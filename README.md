@@ -35,7 +35,7 @@ uv run ruff check .
 uv run pyrefly check
 ```
 
-The implementation contract is documented in `PLAN_new.md`.
+The implementation contract is documented in `PLAN.md`.
 
 ## License
 

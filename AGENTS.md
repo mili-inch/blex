@@ -1,6 +1,6 @@
 # Repository guide
 
-`PLAN_new.md` is the normative product specification. Do not introduce aliases,
+`PLAN.md` is the normative product specification. Do not introduce aliases,
 compatibility paths, implicit project discovery, or silent fallback behavior that
 is not defined there.
 
