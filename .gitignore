@@ -4,7 +4,13 @@ __pycache__/
 build/
 dist/
 wheels/
-*.egg-info
+.blex/
+*.egg-info/
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.pyrefly_cache/
 
 # Virtual environments
-.venv
+.venv/

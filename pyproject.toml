@@ -1,17 +1,49 @@
-[project]
-name = "blex"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-authors = [
-    { name = "mili-inch", email = "hangoumesi@gmail.com" }
-]
-requires-python = ">=3.11"
-dependencies = []
-
-[project.scripts]
-blex = "blex.cli:main"
-
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13"]
 build-backend = "uv_build"
+
+[project]
+name = "blex"
+version = "0.1.0"
+description = "Blender Extension development CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+dependencies = [
+    "tomlkit>=0.15,<0.16",
+]
+
+[project.scripts]
+blex = "blex.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",
+    "pytest-cov>=7.1,<8",
+    "ruff>=0.16,<0.17",
+    "pyrefly==1.1.1",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pyrefly]
+project-includes = ["src", "tests"]
+search-path = ["src"]
+python-version = "3.11"
+preset = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--cov=blex",
+    "--cov-report=term-missing",
+    "--cov-fail-under=90",
+]

@@ -1,0 +1,38 @@
+[project]
+name = "BLEX_PROJECT_NAME"
+version = "0.1.0"
+description = "BLEX_DESCRIPTION"
+readme = "README.md"
+authors = [
+    { name = "Your Name", email = "you@example.com" },
+]
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "blex>=0.1.0",
+]
+
+[tool.blex]
+source-dir = "BLEX_SOURCE_DIR"
+blender = "blender"
+pip = "pip"
+
+[tool.blex.dev]
+link-mode = "auto"
+reload-panel = true
+wheels = true
+debugpy = false
+debugpy-host = "127.0.0.1"
+debugpy-port = 5678
+# blend-file = "scene.blend"
+# user-resources = "path/to/user-resources"
+# python = "3.11"
+
+[tool.blex.build]
+output-dir = "dist"
+wheels = true
+# python = ["3.11"]
+# platforms = ["windows-x64", "macos-arm64", "linux-x64"]

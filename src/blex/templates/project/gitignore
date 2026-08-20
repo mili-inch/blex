@@ -1,0 +1,6 @@
+.venv/
+.blex/*
+!.blex/.gitignore
+dist/
+__pycache__/
+*.py[cod]
