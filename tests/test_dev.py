@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import stat
 import sys
 import types
@@ -328,7 +329,7 @@ def test_runtime_rejects_non_directory_source_wheels(tmp_path: Path) -> None:
 
     with pytest.raises(BlexError, match="source wheels entry is not a directory"):
         dev._prepare_runtime(inputs, link_mode="copy")
-    assert not list(inputs.blex_root.glob(".runtime_environment.*.tmp"))
+    assert not list(inputs.blex_root.glob(".tmp-*"))
 
 
 def test_runtime_accepts_internal_symlinked_source_wheels(tmp_path: Path) -> None:
@@ -391,7 +392,7 @@ def test_runtime_rejects_reserved_repository_in_seed(tmp_path: Path) -> None:
     inputs, _root, _source = _runtime_inputs(tmp_path, seed=seed)
     with pytest.raises(BlexError, match="reserved repository"):
         dev._prepare_runtime(inputs, link_mode="copy")
-    assert not list(inputs.blex_root.glob(".runtime_environment.*.tmp"))
+    assert not list(inputs.blex_root.glob(".tmp-*"))
 
 
 def test_seed_copy_dereferences_links_and_detects_cycles(tmp_path: Path) -> None:
@@ -471,7 +472,7 @@ def test_runtime_install_rolls_back_interrupt_after_real_replace(
     def interrupt_after_replace(source: Path, destination: Path) -> None:
         nonlocal interrupted
         original_replace(source, destination)
-        is_backup = source == runtime and destination.name.endswith(".backup")
+        is_backup = source == runtime and destination.name.startswith(".backup-")
         is_install = source == stage and destination == runtime
         if not interrupted and (
             (transition == "backup" and is_backup) or (transition == "install" and is_install)
@@ -490,7 +491,7 @@ def test_runtime_install_rolls_back_interrupt_after_real_replace(
     else:
         assert not dev._lexists(runtime)
     assert not dev._lexists(stage)
-    assert list(blex_root.glob(".runtime_environment.*.backup")) == []
+    assert list(blex_root.glob(".backup-*")) == []
 
 
 def test_runtime_backup_cleanup_failure_keeps_installed_runtime(
@@ -508,7 +509,7 @@ def test_runtime_backup_cleanup_failure_keeps_installed_runtime(
     original_remove = dev._safe_remove_tree
 
     def fail_partial_backup_cleanup(path: Path, *, managed_root: Path) -> None:
-        if path.name.endswith(".backup"):
+        if path.name.startswith(".backup-"):
             (path / "old.txt").unlink()
             raise OSError("simulated partial backup cleanup failure")
         original_remove(path, managed_root=managed_root)
@@ -520,7 +521,7 @@ def test_runtime_backup_cleanup_failure_keeps_installed_runtime(
     assert (runtime / "new.txt").read_text(encoding="utf-8") == "new"
     assert not (runtime / "old.txt").exists()
     assert not dev._lexists(stage)
-    backups = list(blex_root.glob(".runtime_environment.*.backup"))
+    backups = list(blex_root.glob(".backup-*"))
     assert len(backups) == 1
     assert not (backups[0] / "old.txt").exists()
 
@@ -541,7 +542,7 @@ def test_runtime_stage_creation_interrupt_cleans_created_directory(
     ) -> None:
         nonlocal interrupted
         original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
-        if not interrupted and path.name.startswith(".runtime_environment."):
+        if not interrupted and path.parent == inputs.blex_root and path.name.startswith(".tmp-"):
             interrupted = True
             raise KeyboardInterrupt
 
@@ -550,7 +551,42 @@ def test_runtime_stage_creation_interrupt_cleans_created_directory(
         dev._prepare_runtime(inputs, link_mode="copy")
 
     assert interrupted is True
-    assert not list(inputs.blex_root.glob(".runtime_environment.*.tmp"))
+    assert not list(inputs.blex_root.glob(".tmp-*"))
+
+
+def test_managed_temporary_names_are_short(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    identifier = "a" * 32
+    monkeypatch.setattr(dev.uuid, "uuid4", lambda: types.SimpleNamespace(hex=identifier))
+
+    temporary = dev._temporary_path(tmp_path)
+    assert temporary == tmp_path / f".tmp-{identifier}"
+    assert len(temporary.name) == 37
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows legacy path limit regression")
+def test_runtime_creation_with_long_windows_project_path(tmp_path: Path) -> None:
+    stage_suffix = (
+        Path("project")
+        / ".blex"
+        / f".tmp-{'a' * 32}"
+        / "extensions"
+        / "blex_dev"
+        / "demo_extension"
+        / f".tmp-{'b' * 32}"
+    )
+    padding_length = 245 - len(str(tmp_path / stage_suffix)) - 1
+    if padding_length < 1:
+        pytest.skip("pytest temporary root is too long for the regression fixture")
+    padded_root = tmp_path / ("p" * padding_length)
+    inputs, _root, _source = _runtime_inputs(padded_root)
+
+    stage = dev._prepare_runtime(inputs, link_mode="copy")
+    atomic_candidate = stage / "extensions" / "blex_dev" / "demo_extension" / f".tmp-{'b' * 32}"
+
+    assert len(str(atomic_candidate)) == 245
+    assert (
+        stage / "extensions" / "blex_dev" / "demo_extension" / "blender_manifest.toml"
+    ).is_file()
 
 
 def test_dev_lock_is_nonblocking_and_reusable(tmp_path: Path) -> None:

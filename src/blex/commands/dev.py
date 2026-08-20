@@ -120,9 +120,13 @@ def _ensure_final_lf(text: str) -> str:
     return normalized.rstrip("\n") + "\n"
 
 
+def _temporary_path(parent: Path) -> Path:
+    return parent / f".tmp-{uuid.uuid4().hex}"
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary = _temporary_path(path.parent)
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(_ensure_final_lf(text))
@@ -151,7 +155,7 @@ def _ensure_blex_gitignore(blex_root: Path) -> None:
         return
     separator = b"" if not original or original.endswith((b"\n", b"\r")) else b"\n"
     updated = original + separator + ("\n".join(missing) + "\n").encode()
-    temporary = gitignore.with_name(f".{gitignore.name}.{uuid.uuid4().hex}.tmp")
+    temporary = _temporary_path(gitignore.parent)
     try:
         temporary.write_bytes(updated)
         os.replace(temporary, gitignore)
@@ -396,7 +400,7 @@ def _write_generated_manifest(inputs: _RuntimeInputs, extension_root: Path) -> N
 
 
 def _runtime_stage_path(blex_root: Path) -> Path:
-    return blex_root / f".runtime_environment.{uuid.uuid4().hex}.tmp"
+    return _temporary_path(blex_root)
 
 
 def _build_runtime_stage(inputs: _RuntimeInputs, *, mode: str) -> Path:
@@ -460,7 +464,7 @@ def _prepare_runtime(inputs: _RuntimeInputs, *, link_mode: str) -> Path:
 
 
 def _install_runtime(stage: Path, runtime_root: Path, *, blex_root: Path) -> None:
-    backup = blex_root / f".runtime_environment.{uuid.uuid4().hex}.backup"
+    backup = blex_root / f".backup-{uuid.uuid4().hex}"
     had_runtime = _lexists(runtime_root)
     if had_runtime:
         _validate_managed_directory(runtime_root, label="managed runtime directory")
