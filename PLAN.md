@@ -1153,12 +1153,11 @@ debugpyは既定で無効とする。
 - 同梱artifactは`debugpy-1.8.21-py2.py3-none-any.whl`とする。
 - artifact SHA-256は`b1e37d333663c8851516a47364ef473da127f9caebe4417e6df6f5825a7e9a92`とする。
 - debugpyのlicense fileを同梱する。
-- 有効時だけ同梱Wheelを検証・展開する。
+- debugpy有効時に展開先directoryが存在しない場合だけ、同梱Wheelを検証・展開する。
 - host側で`.blex/debugpy`内の一時directoryへ`zipfile`で安全に展開し、完成後に`.blex/debugpy/1.8.21`へrenameする。
 - archive memberが展開先外へ出るpathならエラーにする。
-- 展開済みdirectoryには`.blex-metadata.json`を置き、format`1`、version、artifact hash、および展開fileの相対pathとSHA-256を辞書順で記録する。
-- marker欠落、file欠落、追加file、hash不一致などの破損はエラーにし、自動修復、削除、再展開、network取得を行わない。
-- 正常な展開済みdirectoryは再利用する。
+- `.blex/debugpy/1.8.21`がdirectoryとして存在するかだけを確認し、存在すれば内容を検証せず再利用する。
+- 展開済みdirectory用のmetadataは作成せず、file欠落、追加file、hash不一致などの破損検査を行わない。存在するdirectoryの自動修復、削除、再展開、およびnetwork取得を行わない。
 - bootstrapは展開directoryを`sys.path`先頭へ追加してdebugpyをimportする。
 - `debugpy.listen((host, port))`を呼ぶ。
 - client接続を待機しない。

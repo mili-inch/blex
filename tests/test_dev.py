@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import stat
 import sys
@@ -681,75 +680,35 @@ def test_runtime_rejects_unknown_link_mode(tmp_path: Path) -> None:
         dev._prepare_runtime(inputs, link_mode="junction")
 
 
-def test_debugpy_is_extracted_validated_and_not_repaired(
+def test_debugpy_is_extracted_and_existing_directory_is_reused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     blex_root = tmp_path / ".blex"
     blex_root.mkdir()
     target = dev._prepare_debugpy(blex_root)
-    marker = target / ".blex-metadata.json"
-    metadata = json.loads(marker.read_text(encoding="utf-8"))
-    assert metadata["format"] == 1
-    assert metadata["version"] == "1.8.21"
-    assert metadata["artifact_sha256"] == dev._DEBUGPY_SHA256
-    assert dev._prepare_debugpy(blex_root) == target
+    assert target == blex_root / "debugpy" / dev._DEBUGPY_VERSION
+    assert (target / "debugpy" / "__init__.py").is_file()
+    assert not (target / ".blex-metadata.json").exists()
 
-    with monkeypatch.context() as local_patch:
-        local_patch.setattr(dev, "_DEBUGPY_SHA256", "0" * 64)
-        with pytest.raises(BlexError, match="bundled debugpy Wheel hash mismatch"):
-            dev._prepare_debugpy(blex_root)
-
-    first_relative = metadata["files"][0]["path"]
-    corrupted = target.joinpath(*PurePosixPath(first_relative).parts)
+    corrupted = target / "debugpy" / "__init__.py"
     corrupted.write_bytes(b"corrupt")
-    with pytest.raises(BlexError, match="hash mismatch"):
-        dev._prepare_debugpy(blex_root)
+
+    def unexpected_resource_access() -> Any:
+        raise AssertionError("the bundled Wheel must not be inspected when debugpy exists")
+
+    monkeypatch.setattr(dev, "_debugpy_resource", unexpected_resource_access)
+    assert dev._prepare_debugpy(blex_root) == target
     assert corrupted.read_bytes() == b"corrupt"
 
 
-def test_debugpy_corruption_schema_and_inventory_are_rejected(tmp_path: Path) -> None:
-    target = tmp_path / "debugpy"
-    target.mkdir()
-    marker = target / ".blex-metadata.json"
-    with pytest.raises(BlexError, match="metadata is missing"):
-        dev._validate_debugpy_install(target)
+def test_debugpy_existing_target_must_be_a_directory(tmp_path: Path) -> None:
+    blex_root = tmp_path / ".blex"
+    target = blex_root / "debugpy" / dev._DEBUGPY_VERSION
+    target.parent.mkdir(parents=True)
+    target.write_text("not a directory", encoding="utf-8")
 
-    marker.write_text("not json", encoding="utf-8")
-    with pytest.raises(BlexError, match="metadata is corrupt"):
-        dev._validate_debugpy_install(target)
-    marker.write_text("{}", encoding="utf-8")
-    with pytest.raises(BlexError, match="invalid schema"):
-        dev._validate_debugpy_install(target)
-
-    base: dict[str, Any] = {
-        "format": 2,
-        "version": dev._DEBUGPY_VERSION,
-        "artifact_sha256": dev._DEBUGPY_SHA256,
-        "files": [],
-    }
-    marker.write_text(json.dumps(base), encoding="utf-8")
-    with pytest.raises(BlexError, match="does not match"):
-        dev._validate_debugpy_install(target)
-
-    base["format"] = 1
-    base["files"] = [{"path": "module.py"}]
-    marker.write_text(json.dumps(base), encoding="utf-8")
-    with pytest.raises(BlexError, match="invalid file entry"):
-        dev._validate_debugpy_install(target)
-
-    digest = hashlib.sha256(b"module").hexdigest()
-    base["files"] = [
-        {"path": "z.py", "sha256": digest},
-        {"path": "a.py", "sha256": digest},
-    ]
-    marker.write_text(json.dumps(base), encoding="utf-8")
-    with pytest.raises(BlexError, match="not sorted"):
-        dev._validate_debugpy_install(target)
-
-    base["files"] = [{"path": "missing.py", "sha256": digest}]
-    marker.write_text(json.dumps(base), encoding="utf-8")
-    with pytest.raises(BlexError, match="inventory differs"):
-        dev._validate_debugpy_install(target)
+    with pytest.raises(BlexError, match="debugpy extraction directory is not a directory"):
+        dev._prepare_debugpy(blex_root)
 
 
 def test_debugpy_extraction_rejects_bad_archives_and_unsafe_members(tmp_path: Path) -> None:
@@ -765,11 +724,6 @@ def test_debugpy_extraction_rejects_bad_archives_and_unsafe_members(tmp_path: Pa
         with zipfile.ZipFile(archive, "w") as wheel:
             wheel.writestr(info, b"value")
         return archive
-
-    metadata_info = zipfile.ZipInfo(".blex-metadata.json")
-    metadata_wheel = archive_with(metadata_info)
-    with pytest.raises(BlexError, match="conflicts with extraction metadata"):
-        dev._extract_debugpy_wheel(metadata_wheel, tmp_path / "metadata-output")
 
     symlink_info = zipfile.ZipInfo("link.py")
     symlink_info.external_attr = (stat.S_IFLNK | 0o777) << 16

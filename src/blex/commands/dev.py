@@ -3,14 +3,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
-import json
 import os
 import shutil
 import stat
 import sys
 import uuid
 import zipfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path, PurePosixPath
@@ -538,14 +537,6 @@ def _rollback_runtime_install(
         _safe_remove_tree(stage, managed_root=blex_root)
 
 
-def _valid_sha256(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
-    )
-
-
 def _safe_archive_path(name: str, *, directory: bool) -> PurePosixPath:
     raw = name[:-1] if directory and name.endswith("/") else name
     segments = raw.split("/")
@@ -562,85 +553,7 @@ def _safe_archive_path(name: str, *, directory: bool) -> PurePosixPath:
     return relative
 
 
-def _iter_tree_files(root: Path) -> Iterator[tuple[str, Path]]:
-    pending = [root]
-    while pending:
-        directory = pending.pop()
-        try:
-            entries = sorted(os.scandir(directory), key=lambda entry: entry.name, reverse=True)
-        except OSError as exc:
-            raise BlexError(f"could not inspect debugpy directory: {directory}") from exc
-        for entry in entries:
-            path = Path(entry.path)
-            if _is_link_like(path):
-                raise BlexError(f"debugpy extraction contains a symlink or reparse point: {path}")
-            if entry.is_dir(follow_symlinks=False):
-                pending.append(path)
-            elif entry.is_file(follow_symlinks=False):
-                relative = path.relative_to(root).as_posix()
-                if relative != ".blex-metadata.json":
-                    yield relative, path
-            else:
-                raise BlexError(f"debugpy extraction contains a special file: {path}")
-
-
-def _validate_debugpy_install(target: Path) -> None:
-    _validate_managed_directory(target, label="debugpy extraction directory")
-    marker = target / ".blex-metadata.json"
-    if not marker.is_file() or _is_link_like(marker):
-        raise BlexError(f"debugpy extraction metadata is missing or invalid: {marker}")
-    try:
-        metadata: object = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BlexError(f"debugpy extraction metadata is corrupt: {marker}") from exc
-    if not isinstance(metadata, dict) or set(metadata) != {
-        "format",
-        "version",
-        "artifact_sha256",
-        "files",
-    }:
-        raise BlexError(f"debugpy extraction metadata has an invalid schema: {marker}")
-    if (
-        type(metadata["format"]) is not int
-        or metadata["format"] != 1
-        or metadata["version"] != _DEBUGPY_VERSION
-        or metadata["artifact_sha256"] != _DEBUGPY_SHA256
-        or not isinstance(metadata["files"], list)
-    ):
-        raise BlexError(
-            f"debugpy extraction metadata does not match the bundled artifact: {marker}"
-        )
-
-    expected: dict[str, str] = {}
-    for item in metadata["files"]:
-        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
-            raise BlexError(f"debugpy extraction metadata contains an invalid file entry: {marker}")
-        path_value = item["path"]
-        digest_value = item["sha256"]
-        if not isinstance(path_value, str) or not _valid_sha256(digest_value):
-            raise BlexError(f"debugpy extraction metadata contains an invalid file entry: {marker}")
-        safe_path = _safe_archive_path(path_value, directory=False).as_posix()
-        if safe_path in expected:
-            raise BlexError(f"debugpy extraction metadata contains duplicate paths: {safe_path}")
-        expected[safe_path] = digest_value
-    if list(expected) != sorted(expected):
-        raise BlexError(f"debugpy extraction metadata file inventory is not sorted: {marker}")
-
-    actual = {relative: path for relative, path in _iter_tree_files(target)}
-    if set(actual) != set(expected):
-        missing = sorted(set(expected) - set(actual))
-        additional = sorted(set(actual) - set(expected))
-        raise BlexError(
-            f"debugpy extraction file inventory differs from metadata; "
-            f"missing={missing!r}, additional={additional!r}"
-        )
-    for relative, path in actual.items():
-        if _hash_file(path) != expected[relative]:
-            raise BlexError(f"debugpy extraction file hash mismatch: {relative}")
-
-
-def _extract_debugpy_wheel(wheel: Path, destination: Path) -> list[dict[str, str]]:
-    inventory: list[dict[str, str]] = []
+def _extract_debugpy_wheel(wheel: Path, destination: Path) -> None:
     normalized_destinations: set[str] = set()
     try:
         archive = zipfile.ZipFile(wheel)
@@ -650,8 +563,6 @@ def _extract_debugpy_wheel(wheel: Path, destination: Path) -> list[dict[str, str
         for information in archive.infolist():
             is_directory = information.is_dir()
             relative = _safe_archive_path(information.filename, directory=is_directory)
-            if relative.as_posix() == ".blex-metadata.json":
-                raise BlexError("bundled debugpy Wheel conflicts with extraction metadata")
             output = destination.joinpath(*relative.parts)
             output_key = os.path.normcase(str(output))
             if output_key in normalized_destinations:
@@ -675,19 +586,14 @@ def _extract_debugpy_wheel(wheel: Path, destination: Path) -> list[dict[str, str
                 output.mkdir(parents=True, exist_ok=True)
                 continue
             output.parent.mkdir(parents=True, exist_ok=True)
-            digest = hashlib.sha256()
             try:
                 with archive.open(information, "r") as source, output.open("xb") as target:
                     while chunk := source.read(1024 * 1024):
                         target.write(chunk)
-                        digest.update(chunk)
             except OSError as exc:
                 raise BlexError(
                     f"could not extract bundled debugpy file: {information.filename}"
                 ) from exc
-            inventory.append({"path": relative.as_posix(), "sha256": digest.hexdigest()})
-    inventory.sort(key=lambda item: item["path"])
-    return inventory
 
 
 def _debugpy_resource() -> Any:
@@ -699,30 +605,20 @@ def _prepare_debugpy(blex_root: Path) -> Path:
     _validate_managed_directory(debugpy_root, label="managed debugpy directory")
     debugpy_root.mkdir(exist_ok=True)
     target = debugpy_root / _DEBUGPY_VERSION
+    _validate_managed_directory(target, label="debugpy extraction directory")
+    if target.is_dir():
+        return target
+
     resource = _debugpy_resource()
     if resource.name != _DEBUGPY_WHEEL:
         raise BlexError(f"unexpected bundled debugpy artifact: {resource.name}")
     with resources.as_file(resource) as wheel:
         if _hash_file(wheel) != _DEBUGPY_SHA256:
             raise BlexError(f"bundled debugpy Wheel hash mismatch: {wheel}")
-        if _lexists(target):
-            _validate_debugpy_install(target)
-            return target
-
         temporary = debugpy_root / f".{_DEBUGPY_VERSION}.{uuid.uuid4().hex}.tmp"
         try:
             temporary.mkdir()
-            inventory = _extract_debugpy_wheel(wheel, temporary)
-            metadata = {
-                "format": 1,
-                "version": _DEBUGPY_VERSION,
-                "artifact_sha256": _DEBUGPY_SHA256,
-                "files": inventory,
-            }
-            _atomic_write_text(
-                temporary / ".blex-metadata.json",
-                json.dumps(metadata, ensure_ascii=False, indent=2),
-            )
+            _extract_debugpy_wheel(wheel, temporary)
             os.replace(temporary, target)
         except BaseException:
             if _lexists(temporary):
