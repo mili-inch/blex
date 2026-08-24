@@ -49,7 +49,6 @@ _ROOT_GITIGNORE_LINES = (
     "*.py[cod]",
 )
 _BLEX_GITIGNORE_LINES = ("*", "!.gitignore")
-_BLEX_REQUIREMENT_RE = re.compile(r"^\s*blex(?=\s*(?:\[|[<>=!~;@]|$))", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -141,16 +140,6 @@ def _existing_project(path: Path) -> _ExistingProject:
             raise InitError("[project].dependencies must be an array of strings")
         if any(not isinstance(_unwrap(entry), str) for entry in dependencies):
             raise InitError("[project].dependencies must contain only strings")
-
-    dependency_groups_value = document.get("dependency-groups")
-    if dependency_groups_value is not None:
-        dependency_groups = _plain_mapping(dependency_groups_value, "[dependency-groups]")
-        if "dev" in dependency_groups:
-            dev = _unwrap(dependency_groups["dev"])
-            if not isinstance(dev, list) or any(
-                not isinstance(_unwrap(entry), str) for entry in dev
-            ):
-                raise InitError("[dependency-groups].dev must be an array of strings")
 
     return _ExistingProject(document, config, name, description)
 
@@ -277,22 +266,6 @@ def _merge_pyproject(
     for key, value in project_defaults:
         if key not in project:
             project[key] = value
-
-    dependency_groups = _ensure_table(root, "dependency-groups", "[dependency-groups]")
-    if "dev" not in dependency_groups:
-        dependency_groups["dev"] = ["blex>=0.1.0"]
-    else:
-        dev_item = dependency_groups["dev"]
-        plain_dev = _unwrap(dev_item)
-        if not isinstance(plain_dev, list) or any(
-            not isinstance(_unwrap(entry), str) for entry in plain_dev
-        ):
-            raise InitError("[dependency-groups].dev must be an array of strings")
-        if not any(_BLEX_REQUIREMENT_RE.match(cast(str, _unwrap(entry))) for entry in plain_dev):
-            append = getattr(dev_item, "append", None)
-            if not callable(append):
-                raise InitError("[dependency-groups].dev cannot be extended")
-            append("blex>=0.1.0")
 
     tool = _ensure_table(root, "tool", "[tool]")
     blex = _ensure_table(tool, "blex", "[tool.blex]")

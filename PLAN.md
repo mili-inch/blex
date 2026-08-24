@@ -426,8 +426,6 @@ initが既存ファイルを扱う規則は次のとおりとする。
 - 既存`[project].name`も既存Manifestもない場合だけ、第4.3節の基準入力から両方を生成する。
 - 既存TOMLには不足しているfield、table、list entryだけを追加する。
 - 既存値、コメント、key順、未知のfieldは変更しない。
-- 既存`[dependency-groups].dev`にblex requirementが1つでもあれば、そのspecifierを保持して追加しない。
-- blex requirementがなければ`blex>=0.1.0`を末尾へ追加する。
 - 既存`requires-python`は変更しない。fieldがなければ`>=3.11`を追加する。
 - 既存`.gitignore`には不足している正規patternだけを末尾へ追記する。
 - 既存README、`LICENSE`、`__init__.py`、`operators.py`、`panels.py`は内容を変更しない。
@@ -565,11 +563,6 @@ authors = [
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 dependencies = []
-
-[dependency-groups]
-dev = [
-    "blex>=0.1.0",
-]
 
 [tool.blex]
 source-dir = "src/my_extension"

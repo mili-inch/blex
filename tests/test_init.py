@@ -56,6 +56,7 @@ def test_init_creates_complete_project(tmp_path: Path) -> None:
     assert pyproject["tool"]["blex"]["source-dir"] == "src/my_extension"
     assert pyproject["tool"]["blex"]["stage"]["output-dir"] == "dist"
     assert "build-system" not in pyproject
+    assert "dependency-groups" not in pyproject
 
     manifest_text = (root / "src/my_extension/blender_manifest.toml").read_text(encoding="utf-8")
     manifest = tomlkit.parse(manifest_text)
@@ -103,7 +104,7 @@ description = "Kept description"
 requires-python = ">=3.8"
 
 [dependency-groups]
-dev = ["blex==9"]
+dev = ["pytest==9"]
 
 [tool.blex]
 source-dir = "custom_source"
@@ -129,7 +130,7 @@ custom = "preserved"
     assert "# project comment" in pyproject_text
     assert pyproject["project"]["name"] == "kept-name"
     assert pyproject["project"]["requires-python"] == ">=3.8"
-    assert list(pyproject["dependency-groups"]["dev"]) == ["blex==9"]
+    assert list(pyproject["dependency-groups"]["dev"]) == ["pytest==9"]
     assert pyproject["tool"]["blex"]["source-dir"] == "custom_source"
     assert pyproject["tool"]["blex"]["blender"] == "blender"
     assert pyproject["project"]["license"] == "GPL-3.0-or-later"
@@ -280,7 +281,7 @@ def test_transaction_rolls_back_created_tree(
     assert not root.exists()
 
 
-def test_force_adds_missing_project_and_blex_dev_requirement(tmp_path: Path) -> None:
+def test_force_adds_missing_project_without_modifying_dependency_groups(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
     (root / "pyproject.toml").write_text(
@@ -296,8 +297,22 @@ value = true
     assert init_command.run(_args(root, force=True, name="Demo Addon")) == 0
     document = tomlkit.parse((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert document["project"]["name"] == "demo-addon"
-    assert list(document["dependency-groups"]["dev"]) == ["pytest", "blex>=0.1.0"]
+    assert list(document["dependency-groups"]["dev"]) == ["pytest"]
     assert document["tool"]["unrelated"]["value"] is True
+
+
+def test_force_preserves_dependency_groups_without_validation(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\n[dependency-groups]\ndev = 1\n',
+        encoding="utf-8",
+    )
+
+    assert init_command.run(_args(root, force=True)) == 0
+
+    document = tomlkit.parse((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert document["dependency-groups"]["dev"] == 1
 
 
 def test_force_does_not_renormalize_complete_existing_names(tmp_path: Path) -> None:
@@ -334,7 +349,6 @@ source-dir = "extension"
         '[project]\nname = "demo"\nrequires-python = 3.11\n',
         '[project]\nname = "demo"\ndependencies = "bad"\n',
         '[project]\nname = "demo"\ndependencies = [1]\n',
-        '[project]\nname = "demo"\n[dependency-groups]\ndev = 1\n',
     ],
 )
 def test_force_rejects_invalid_existing_project_types(tmp_path: Path, project_text: str) -> None:

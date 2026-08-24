@@ -10,11 +10,6 @@ requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 dependencies = []
 
-[dependency-groups]
-dev = [
-    "blex>=0.1.0",
-]
-
 [tool.blex]
 source-dir = "BLEX_SOURCE_DIR"
 blender = "blender"
