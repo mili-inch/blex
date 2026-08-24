@@ -2,7 +2,7 @@
 
 `blex` is a command-line tool for creating, developing, and staging Blender
 Extensions. It keeps development state under `.blex`, resolves binary wheels for
-Blender's supported targets, and never requires Blender for a release build.
+Blender's supported targets, and creates release staging trees without Blender.
 
 ## Requirements
 
@@ -18,10 +18,10 @@ blex --help
 blex init my-extension
 cd my-extension
 blex dev
-blex build
+blex stage
 ```
 
-Run `blex <command> --help` for all command-specific options. `blex build`
+Run `blex <command> --help` for all command-specific options. `blex stage`
 creates per-Python staging trees under `dist/`; packaging those trees as final
 Blender Extension archives is deliberately left to the caller.
 
@@ -123,7 +123,7 @@ debugpy-port = 5678
 # user-resources = "path/to/user-resources"
 # python = "3.11"
 
-[tool.blex.build]
+[tool.blex.stage]
 output-dir = "dist"
 wheels = true
 # python = ["3.11"]
@@ -141,7 +141,7 @@ configured list. `blex` does not provide environment-variable overrides for its
 own settings. Standard pip configuration and `PIP_*` environment variables are
 inherited by the pip subprocess.
 
-Unknown keys inside `[tool.blex]`, `[tool.blex.dev]`, or `[tool.blex.build]` are
+Unknown keys inside `[tool.blex]`, `[tool.blex.dev]`, or `[tool.blex.stage]` are
 errors. Unknown values in other project metadata and tool tables are preserved.
 The source directory is selected from `--source-dir`, then
 `[tool.blex].source-dir`, then `src/<manifest-id>`.
@@ -202,7 +202,7 @@ blex dev --debugpy --debugpy-host 127.0.0.1 --debugpy-port 5678
 
 ## Manage Python dependencies
 
-Automatic Wheel collection is enabled by default for `dev` and `build`. Its
+Automatic Wheel collection is enabled by default for `dev` and `stage`. Its
 only dependency input is `[project].dependencies`; optional dependencies and
 dependency groups are not collected. Dependencies must be index-resolvable PEP
 508 requirements with binary Wheels. Direct URLs, VCS requirements, local
@@ -217,7 +217,7 @@ unfixed release should be selected.
 
 When automatic collection is enabled for `dev`, the target Python is selected
 from `--python`, then `[tool.blex.dev].python`, then `.python-version`; only the
-current host platform is targeted. For `build`, `--python` and `--platform` may
+current host platform is targeted. For `stage`, `--python` and `--platform` may
 each be repeated. The corresponding configured arrays are used when no
 command-line list is supplied, and `.python-version` plus the current host
 platform are the final defaults.
@@ -233,7 +233,7 @@ Supported platform identifiers are:
 ## Create staging trees
 
 ```text
-blex build [DIRECTORY]
+blex stage [DIRECTORY]
     [--source-dir PATH]
     [--output-dir PATH]
     [--wheels | --no-wheels]
@@ -247,7 +247,7 @@ For example, the following creates staging trees for two Python versions and
 collects the union of the Windows x64 and macOS ARM64 Wheels for each one:
 
 ```console
-blex build --python 3.11 --python 3.12 --platform windows-x64 --platform macos-arm64
+blex stage --python 3.11 --python 3.12 --platform windows-x64 --platform macos-arm64
 ```
 
 The default output directory is `dist`, with one final source tree per Python
@@ -265,12 +265,12 @@ dist/
 Multiple platforms are combined in the same Python source tree rather than
 split into platform directories. The generated manifest records the selected
 platforms and merged Wheels. Only selected `pyX.Y` target directories are
-replaced; unselected Python builds and other files in the output directory are
+replaced; unselected Python staging trees and other files in the output directory are
 left unchanged.
 
 The staging copy includes all content under the source directory, including
 hidden files and `__pycache__`; manifest `paths_exclude_pattern` entries are not
-used as copy filters. `blex build` does not start Blender, run Blender's Extension
+used as copy filters. `blex stage` does not start Blender, run Blender's Extension
 build command, or create a ZIP archive.
 
 ## Contributing

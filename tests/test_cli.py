@@ -35,8 +35,8 @@ def test_embedded_nul_paths_are_reported_as_command_errors(
 
 def test_top_level_and_command_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main_module.main(["--help"]) == 0
-    assert "{init,dev,build}" in capsys.readouterr().out
-    assert main_module.main(["build", "--help"]) == 0
+    assert "{init,dev,stage}" in capsys.readouterr().out
+    assert main_module.main(["stage", "--help"]) == 0
     assert "--platform" in capsys.readouterr().out
 
 
@@ -77,7 +77,7 @@ def test_dev_blender_arguments_require_and_strip_delimiter() -> None:
     assert error.value.code == 2
 
     with pytest.raises(SystemExit) as wrong_command:
-        parse_args(["build", "--"])
+        parse_args(["stage", "--"])
     assert wrong_command.value.code == 2
 
 
@@ -89,10 +89,10 @@ def test_single_target_python_may_only_be_specified_once(command: str) -> None:
     assert error.value.code == 2
 
 
-def test_build_repeated_targets_preserve_cli_order() -> None:
+def test_stage_repeated_targets_preserve_cli_order() -> None:
     args = create_parser().parse_args(
         [
-            "build",
+            "stage",
             "--python",
             "3.11",
             "--python",

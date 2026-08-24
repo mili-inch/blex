@@ -39,7 +39,7 @@ class ProjectNames:
 
 @dataclass(frozen=True)
 class ProjectData:
-    """Validated project metadata needed by ``dev`` and ``build``."""
+    """Validated project metadata needed by ``dev`` and ``stage``."""
 
     root: Path
     path: Path
@@ -322,7 +322,7 @@ def _mapping(value: object, location: str) -> Mapping[str, object]:
 
 
 def load_pyproject(root: Path) -> ProjectData:
-    """Load the project metadata required by ``dev`` and ``build``."""
+    """Load the project metadata required by ``dev`` and ``stage``."""
 
     path = root / "pyproject.toml"
     if not path.is_file():

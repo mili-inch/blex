@@ -10,7 +10,7 @@ CLI名とPython distribution名はともに`blex`とする。初期リリース�
 
 - `blex init`: Extensionプロジェクトを初期化する。
 - `blex dev`: 隔離したユーザー領域へExtensionを配置し、開発用Blenderを起動する。
-- `blex build`: 対象Python・Platform向けWheelを収集し、Pythonごとのstagingを作成する。
+- `blex stage`: 対象Python・Platform向けWheelを収集し、Pythonごとのstagingを作成する。
 
 本仕様に明記していない後方互換、オプションの別名、設定の別名、自動探索、silent fallbackは実装しない。安全に継続できない入力や状態は明示的なエラーとして処理する。
 
@@ -52,9 +52,9 @@ CLI名とPython distribution名はともに`blex`とする。初期リリース�
 - 1プロジェクト内の複数Extensionを同時に管理しない。
 - project rootやManifestの上位ディレクトリ探索を行わない。
 - source-dir内を再帰検索してManifestを自動発見しない。
-- `dev`および`build`ではBlender実行ファイルからPythonバージョンを検出しない。
-- `build`ではBlender標準のExtension buildコマンドを実行しない。
-- `build`ではZIPなどの最終配布物を作成しない。
+- `dev`および`stage`ではBlender実行ファイルからPythonバージョンを検出しない。
+- `stage`ではBlender標準のExtension buildコマンドを実行しない。
+- `stage`ではZIPなどの最終配布物を作成しない。
 - v0.1では安定した公開Python APIを提供しない。
 - shell completion、短縮オプション、オプション名の別名は提供しない。
 
@@ -109,7 +109,7 @@ src/blex/
 │   ├── __init__.py
 │   ├── init.py
 │   ├── dev.py
-│   └── build.py
+│   └── stage.py
 ├── core/
 │   ├── __init__.py
 │   ├── project.py
@@ -169,14 +169,14 @@ blexが新規生成するテキストファイルは、OSを問わず次の形�
 - 相対`DIRECTORY`は現在の作業ディレクトリ基準で解決する。
 - 上位ディレクトリから`pyproject.toml`を探索しない。
 - `init`は存在しない`DIRECTORY`と、その不足している親ディレクトリを作成できる。
-- `dev`と`build`ではproject root、`pyproject.toml`、解決済みsource-dir、`blender_manifest.toml`が存在しなければエラーにする。
+- `dev`と`stage`ではproject root、`pyproject.toml`、解決済みsource-dir、`blender_manifest.toml`が存在しなければエラーにする。
 
 ### 4.2 単一Extensionとsource-dir
 
 - blexが1回のコマンドで扱うManifestは、解決済みsource-dir直下の`blender_manifest.toml`だけとする。
 - source-dirの優先順位は、CLI指定、`[tool.blex].source-dir`、組み込み既定値の順とする。
 - `init`の組み込み既定値は`src/<生成したmanifest-id>`とする。
-- `dev`および`build`で設定がない場合は、`[project].name`を命名規則でmanifest IDへ変換し、`src/<manifest-id>`とする。
+- `dev`および`stage`で設定がない場合は、`[project].name`を命名規則でmanifest IDへ変換し、`src/<manifest-id>`とする。
 - source-dirを再帰検索したり、他のManifestへ自動で切り替えたりしない。
 - source-dirは実体を解決した後もproject rootの子孫でなければならない。project rootそのものはsource-dirにできない。
 - source-dirはproject root直下の`.blex`または`.git`と同一、またはその子孫にできない。
@@ -221,7 +221,7 @@ CLI、設定、`.python-version`で扱う対象Pythonバージョンは`<major>.
 - `3`、`3.11.2`、`03.11`、複数行はエラーにする。
 - blexが扱う対象Pythonバージョン自体には下限を設けない。
 - Pythonバージョンの重複指定はエラーにする。
-- build IDは正規化した値から`py<major>.<minor>`として生成する。
+- stage IDは正規化した値から`py<major>.<minor>`として生成する。
 
 ### 4.5 Pathの解決と安全性
 
@@ -259,14 +259,14 @@ debugpy-port = 5678
 # user-resources = "path/to/user-resources"
 # python = "3.11"
 
-[tool.blex.build]
+[tool.blex.stage]
 output-dir = "dist"
 wheels = true
 # python = ["3.11"]
 # platforms = ["windows-x64", "macos-arm64", "linux-x64"]
 ```
 
-`[tool.blex].blender`は共有位置に置くが、`build`では読み取っても解決・実行しない。
+`[tool.blex].blender`は共有位置に置くが、`stage`では読み取っても解決・実行しない。
 
 ### 5.2 許可するキー
 
@@ -288,14 +288,14 @@ wheels = true
 - `user-resources`: path文字列
 - `python`: Pythonバージョン文字列
 
-`[tool.blex.build]`:
+`[tool.blex.stage]`:
 
 - `output-dir`: path文字列
 - `wheels`: boolean
 - `python`: Pythonバージョン文字列の非空配列
 - `platforms`: 対応Platform識別子の非空配列
 
-`[tool.blex]`およびその`dev`、`build`で未知のキーを検出した場合はエラーにする。値の型が異なる場合、空文字列の場合、配列が空の場合もエラーにする。他の`tool` tableやproject metadataの未知の値は保持する。
+`[tool.blex]`およびその`dev`、`stage`で未知のキーを検出した場合はエラーにする。値の型が異なる場合、空文字列の場合、配列が空の場合もエラーにする。他の`tool` tableやproject metadataの未知の値は保持する。
 
 ### 5.3 優先順位
 
@@ -317,7 +317,7 @@ wheels = true
 - 最終的なwheelsが無効なとき、`--refresh-wheels`の明示指定はエラーにする。
 - wheels無効時もpipやPythonの設定値は保持でき、値の形式は検証する。
 - `dev --no-wheels`では対象Pythonとpipを解決・実行しない。
-- `build --no-wheels`でもPythonとPlatformはbuild IDと生成Manifestに使用するが、pipは解決・実行しない。
+- `stage --no-wheels`でもPythonとPlatformはstage IDと生成Manifestに使用するが、pipは解決・実行しない。
 
 ## 6. 共通CLI規約
 
@@ -359,7 +359,7 @@ blex [--version] [--verbose] <command>
 
 ### 7.1 pyproject.toml
 
-`dev`および`build`では次を検証する。
+`dev`および`stage`では次を検証する。
 
 - TOMLとして読み取れる。
 - `[project]`がtableである。
@@ -371,7 +371,7 @@ blex [--version] [--verbose] <command>
 
 ### 7.2 blender_manifest.toml
 
-blexはBlenderの完全なManifest validatorを再実装しない。`dev`および`build`では次だけを検証する。
+blexはBlenderの完全なManifest validatorを再実装しない。`dev`および`stage`では次だけを検証する。
 
 - TOMLとして読み取れる。
 - `schema_version`が文字列`1.0.0`である。
@@ -453,7 +453,7 @@ initが既存ファイルを扱う規則は次のとおりとする。
 
 - `--python`と`--blender`を同時指定した場合は`--python`を使用し、Blenderを起動せず、Blender cacheにも触れない。
 - `--python`は指定値をそのまま正規化して`.python-version`へ書く。
-- `--python`は`[tool.blex.dev].python`または`[tool.blex.build].python`を追加・変更しない。
+- `--python`は`[tool.blex.dev].python`または`[tool.blex.stage].python`を追加・変更しない。
 - `--blender`はPython検出だけに使用し、生成または既存の`[tool.blex].blender`を追加値で上書きしない。
 - 明示指定がない既存`.python-version`は保持するが、形式不正ならエラーにする。
 - Pythonバージョンが3.11未満でも、`requires-python`を変更したり警告で代替したりしない。
@@ -587,7 +587,7 @@ debugpy-port = 5678
 # user-resources = "path/to/user-resources"
 # python = "3.11"
 
-[tool.blex.build]
+[tool.blex.stage]
 output-dir = "dist"
 wheels = true
 # python = ["3.11"]
@@ -762,7 +762,7 @@ blex dev
 
 ## 9. Wheel処理
 
-Wheel処理は`dev`と`build`で共有する。
+Wheel処理は`dev`と`stage`で共有する。
 
 ### 9.1 自動収集と手書きWheel
 
@@ -800,12 +800,12 @@ blexは依存関係resolverを実装せず、許可形式の詳細validationとt
 - CLIと設定がなければ`.python-version`を使用する。
 - 自動Wheel収集が無効なら、CLIまたは設定の形式だけを検証し、`.python-version`を既定値として読み取らない。
 
-`build`:
+`stage`:
 
 - CLI`--python`は反復指定できる。
-- 設定は`[tool.blex.build].python`の非空配列とする。
+- 設定は`[tool.blex.stage].python`の非空配列とする。
 - CLIと設定がなければ`.python-version`の1値を使用する。
-- `--no-wheels`でもbuild ID作成のためPython解決を行う。
+- `--no-wheels`でもstage ID作成のためPython解決を行う。
 
 Blender実行ファイルからのPython検出は行わない。
 
@@ -813,10 +813,10 @@ Blender実行ファイルからのPython検出は行わない。
 
 `dev`はblex processが現在動作する1 Platformだけを対象とし、Platform optionを提供しない。
 
-`build`:
+`stage`:
 
 - CLI`--platform`は反復指定できる。
-- 設定は`[tool.blex.build].platforms`の非空配列とする。
+- 設定は`[tool.blex.stage].platforms`の非空配列とする。
 - CLIと設定がなければ現在のprocess architectureを使用する。
 
 現在Platformは`platform.system()`と`platform.machine()`から次のように決定する。
@@ -981,7 +981,7 @@ blex dev [DIRECTORY]
 
 - 同じprojectで別の`dev`が動作中なら待機せずエラーにする。
 - lock fileは残してよいが、process終了時にOS lockを解放する。
-- `build`との同時実行は許可する。
+- `stage`との同時実行は許可する。
 
 ### 10.3 開発用user resources
 
@@ -1174,12 +1174,12 @@ debugpyは既定で無効とする。
 - 通常のBlender終了は終了コードをそのまま返す。
 - process終了後にdev lockを解放する。
 
-## 11. `blex build`
+## 11. `blex stage`
 
 ### 11.1 CLI
 
 ```text
-blex build [DIRECTORY]
+blex stage [DIRECTORY]
     [--source-dir PATH]
     [--output-dir PATH]
     [--wheels | --no-wheels]
@@ -1191,18 +1191,18 @@ blex build [DIRECTORY]
 
 Blender executable option、Blender Python検出option、Blenderへの追加引数は提供しない。
 
-### 11.2 build lock
+### 11.2 stage lock
 
-`build`開始時に`.blex/locks/build.lock`をOS file lockする。
+`stage`開始時に`.blex/locks/stage.lock`をOS file lockする。
 
-- 同じprojectで別の`build`が動作中なら待機せずエラーにする。
+- 同じprojectで別の`stage`が動作中なら待機せずエラーにする。
 - `dev`との同時実行は許可する。
 - Wheel cacheの競合はfingerprint単位lockで調停する。
-- build終了時にOS lockを解放する。
+- stage終了時にOS lockを解放する。
 
 ### 11.3 output-dir
 
-output-dirはCLI`--output-dir`、`[tool.blex.build].output-dir`、組み込み値`dist`の順で決定する。
+output-dirはCLI`--output-dir`、`[tool.blex.stage].output-dir`、組み込み値`dist`の順で決定する。
 
 実体解決後、次をすべて満たさなければエラーにする。
 
@@ -1215,7 +1215,7 @@ output-dirはCLI`--output-dir`、`[tool.blex.build].output-dir`、組み込み�
 - 選択された`pyX.Y` targetがsymlinkではない。
 - output-dirまたは選択targetが存在する通常fileならエラーにする。
 
-blexが削除・置換できるのは、選択された`<output-dir>/pyX.Y`とblex自身の一時・backup directoryだけとする。output-dir内の未選択Python buildとその他のfileは変更しない。
+blexが削除・置換できるのは、選択された`<output-dir>/pyX.Y`とblex自身の一時・backup directoryだけとする。output-dir内の未選択Python staging treeとその他のfileは変更しない。
 
 ### 11.4 staging構造
 
@@ -1230,7 +1230,7 @@ Pythonバージョンごとに次を作成する。
         └── wheels/
 ```
 
-- build IDはPythonバージョンだけから生成する。
+- stage IDはPythonバージョンだけから生成する。
 - 複数PlatformでもPlatformごとにdirectoryを分けない。
 - source-dir全体を実fileとしてcopyする。
 - 内部symlinkは第4.2節を検証した上で実体化する。
@@ -1247,21 +1247,21 @@ Pythonバージョンごとに次を作成する。
 
 ### 11.5 全Python transaction
 
-build command全体を1 transactionとして扱う。
+stage command全体を1 transactionとして扱う。
 
-1. UUID4の小文字32桁hexを`run-id`とし、`.blex/staging/build/<run-id>`で全Pythonのsource treeを完成させる。
+1. UUID4の小文字32桁hexを`run-id`とし、`.blex/staging/stage/<run-id>`で全Pythonのsource treeを完成させる。
 2. 全Pythonのvalidation、Wheel取得、copy、Manifest生成が成功するまでoutput-dirを変更しない。
-3. `.blex/staging/build/<run-id>/transaction.json`へ対象、既存targetのbackup path、commit進捗を記録する。
+3. `.blex/staging/stage/<run-id>/transaction.json`へ対象、既存targetのbackup path、commit進捗を記録する。
 4. 選択targetの既存directoryをtransaction backupへrenameする。
 5. 新しいdirectoryを各targetへrenameする。
 6. 全targetのcommit成功後にbackupとcommit記録を削除する。
 
 - preparation中の失敗では全一時directoryを削除し、既存outputを変更しない。
 - 捕捉可能なcommit失敗やCtrl+Cでは、完了済みrenameを逆順にrollbackし、全選択targetを元へ戻す。
-- 既存targetは毎回自動的に再生成し、buildにはforce optionを設けない。
+- 既存targetは毎回自動的に再生成し、stageにはforce optionを設けない。
 - 通常の例外と捕捉可能な割り込みについて、全Pythonを成功または無変更とする。
 - process強制終了、power loss、OS crash中のcrash consistencyは保証しない。
-- build lock取得後、`.blex/staging/build`に前回runのentryが1つでも残っていればabandoned transactionとみなし、自動削除、自動復旧、処理続行を行わず、関連pathを表示してエラーにする。
+- stage lock取得後、`.blex/staging/stage`に前回runのentryが1つでも残っていればabandoned transactionとみなし、自動削除、自動復旧、処理続行を行わず、関連pathを表示してエラーにする。
 
 ## 12. managed directoryと排他
 
@@ -1278,14 +1278,14 @@ blexがproject内で管理する領域は次のとおりとする。
 │   └── 1.8.21/
 ├── locks/
 │   ├── dev.lock
-│   ├── build.lock
+│   ├── stage.lock
 │   └── wheels/
 │       └── py3.11/
 │           └── windows-x64/
 │               └── <fingerprint>.lock
 ├── runtime_environment/
 ├── staging/
-│   └── build/
+│   └── stage/
 └── wheels/
     └── <Python・Platform・fingerprint別cache entry>
 ```
@@ -1294,8 +1294,8 @@ blexがproject内で管理する領域は次のとおりとする。
 - recursive deleteまたはreplace前に、対象の絶対pathが期待するmanaged root内にあることを再検証する。
 - unresolved環境変数、glob、project root、source-dirをrecursive delete対象にしない。
 - managed root自体がsymlinkならエラーにする。
-- dev lockとbuild lockは別であり、`dev`と`build`は同時実行できる。
-- cache lockはdev/build間で共有する。
+- dev lockとstage lockは別であり、`dev`と`stage`は同時実行できる。
+- cache lockはdev/stage間で共有する。
 - lock取得は待機しない。
 - OS lockはprocess異常終了時にもOSによって解放される。lock file自体の存在だけでstale判定しない。
 
@@ -1368,10 +1368,10 @@ GitHub Actionsで次を実行する。
 - 本仕様の3コマンドと全optionが実装されている。
 - runtimeとcacheが`.blex`以下だけに配置される。
 - Manifest schema defaultが`1.0.0`、Manifest version defaultが`1.0.0`である。
-- build IDがPythonバージョンだけから生成される。
-- `dev`と`build`のPythonバージョンを直接指定または`.python-version`からだけ決定する。
-- source Manifestを`dev`または`build`が変更しない。
-- `build`がBlenderを実行せず、stagingを保持する。
+- stage IDがPythonバージョンだけから生成される。
+- `dev`と`stage`のPythonバージョンを直接指定または`.python-version`からだけ決定する。
+- source Manifestを`dev`または`stage`が変更しない。
+- `stage`がBlenderを実行せず、stagingを保持する。
 - runtime dependencyが`tomlkit`以外に増えていない。
 - debugpyが既定で無効であり、同梱1.8.21だけを使用する。
 - 全test、coverage、Ruff、Pyreflyが成功する。

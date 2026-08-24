@@ -35,8 +35,8 @@ class DevConfig:
 
 
 @dataclass(frozen=True)
-class BuildConfig:
-    """Values explicitly present in ``[tool.blex.build]``."""
+class StageConfig:
+    """Values explicitly present in ``[tool.blex.stage]``."""
 
     output_dir: str | None = None
     wheels: bool | None = None
@@ -52,7 +52,7 @@ class BlexConfig:
     blender: str | None = None
     pip: str | None = None
     dev: DevConfig = DevConfig()
-    build: BuildConfig = BuildConfig()
+    stage: StageConfig = StageConfig()
 
 
 def _unwrap(value: object) -> object:
@@ -162,8 +162,8 @@ def _load_dev(table: Mapping[str, object]) -> DevConfig:
     )
 
 
-def _load_build(table: Mapping[str, object]) -> BuildConfig:
-    location = "[tool.blex.build]"
+def _load_stage(table: Mapping[str, object]) -> StageConfig:
+    location = "[tool.blex.stage]"
     _unknown_keys(table, {"output-dir", "wheels", "python", "platforms"}, location)
 
     python_values = _optional_string_array(table, "python", location)
@@ -184,7 +184,7 @@ def _load_build(table: Mapping[str, object]) -> BuildConfig:
                 raise ConfigurationError(f"duplicate platform in {location}.platforms: {platform}")
             seen.add(platform)
 
-    return BuildConfig(
+    return StageConfig(
         output_dir=_optional_string(table, "output-dir", location),
         wheels=_optional_bool(table, "wheels", location),
         python=python_values,
@@ -209,15 +209,15 @@ def load_config(document: Mapping[str, object]) -> BlexConfig:
     if blex_value is None:
         return BlexConfig()
     blex = _as_mapping(blex_value, "[tool.blex]")
-    _unknown_keys(blex, {"source-dir", "blender", "pip", "dev", "build"}, "[tool.blex]")
+    _unknown_keys(blex, {"source-dir", "blender", "pip", "dev", "stage"}, "[tool.blex]")
 
     dev_value = blex.get("dev")
-    build_value = blex.get("build")
+    stage_value = blex.get("stage")
     dev = DevConfig() if dev_value is None else _load_dev(_as_mapping(dev_value, "[tool.blex.dev]"))
-    build = (
-        BuildConfig()
-        if build_value is None
-        else _load_build(_as_mapping(build_value, "[tool.blex.build]"))
+    stage = (
+        StageConfig()
+        if stage_value is None
+        else _load_stage(_as_mapping(stage_value, "[tool.blex.stage]"))
     )
 
     return BlexConfig(
@@ -225,7 +225,7 @@ def load_config(document: Mapping[str, object]) -> BlexConfig:
         blender=_optional_string(blex, "blender", "[tool.blex]"),
         pip=_optional_string(blex, "pip", "[tool.blex]"),
         dev=dev,
-        build=build,
+        stage=stage,
     )
 
 

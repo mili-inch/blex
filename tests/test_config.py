@@ -50,7 +50,7 @@ blend-file = "scene.blend"
 user-resources = "seed"
 python = "3.11"
 
-[tool.blex.build]
+[tool.blex.stage]
 output-dir = "stage"
 wheels = false
 python = ["3.14", "3.11"]
@@ -70,10 +70,10 @@ platforms = ["windows-arm64", "linux-x64"]
     assert config.dev.blend_file == "scene.blend"
     assert config.dev.user_resources == "seed"
     assert config.dev.python == "3.11"
-    assert config.build.output_dir == "stage"
-    assert config.build.wheels is False
-    assert config.build.python == ("3.14", "3.11")
-    assert config.build.platforms == ("windows-arm64", "linux-x64")
+    assert config.stage.output_dir == "stage"
+    assert config.stage.wheels is False
+    assert config.stage.python == ("3.14", "3.11")
+    assert config.stage.platforms == ("windows-arm64", "linux-x64")
 
 
 @pytest.mark.parametrize(
@@ -81,15 +81,15 @@ platforms = ["windows-arm64", "linux-x64"]
     [
         "[tool.blex]\nunknown = true\n",
         "[tool.blex.dev]\nunknown = true\n",
-        "[tool.blex.build]\nunknown = true\n",
+        "[tool.blex.stage]\nunknown = true\n",
         '[tool.blex]\nsource-dir = ""\n',
         "[tool.blex.dev]\nreload-panel = 1\n",
         '[tool.blex.dev]\nlink-mode = "hardlink"\n',
         "[tool.blex.dev]\ndebugpy-port = 0\n",
-        "[tool.blex.build]\npython = []\n",
-        '[tool.blex.build]\npython = ["3.11", "3.11"]\n',
-        '[tool.blex.build]\nplatforms = ["linux-arm64"]\n',
-        '[tool.blex.build]\nplatforms = ["linux-x64", "linux-x64"]\n',
+        "[tool.blex.stage]\npython = []\n",
+        '[tool.blex.stage]\npython = ["3.11", "3.11"]\n',
+        '[tool.blex.stage]\nplatforms = ["linux-arm64"]\n',
+        '[tool.blex.stage]\nplatforms = ["linux-x64", "linux-x64"]\n',
     ],
 )
 def test_invalid_config_is_rejected(body: str) -> None:

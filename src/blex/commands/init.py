@@ -316,10 +316,10 @@ def _merge_pyproject(
         if key not in dev:
             dev[key] = value
 
-    build = _ensure_table(blex, "build", "[tool.blex.build]")
+    stage = _ensure_table(blex, "stage", "[tool.blex.stage]")
     for key, value in (("output-dir", "dist"), ("wheels", True)):
-        if key not in build:
-            build[key] = value
+        if key not in stage:
+            stage[key] = value
     return tomlkit.dumps(document).encode("utf-8")
 
 

@@ -31,7 +31,7 @@ debugpy-port = 5678
 # user-resources = "path/to/user-resources"
 # python = "3.11"
 
-[tool.blex.build]
+[tool.blex.stage]
 output-dir = "dist"
 wheels = true
 # python = ["3.11"]

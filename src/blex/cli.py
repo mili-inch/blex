@@ -7,9 +7,9 @@ import sys
 from collections.abc import Sequence
 
 from blex import __version__
-from blex.commands import build as build_command
 from blex.commands import dev as dev_command
 from blex.commands import init as init_command
+from blex.commands import stage as stage_command
 
 PLATFORMS = (
     "windows-x64",
@@ -64,16 +64,16 @@ def create_parser() -> argparse.ArgumentParser:
     dev_parser.epilog = "Pass additional Blender arguments after an explicit -- delimiter."
     dev_parser.set_defaults(handler=dev_command.run)
 
-    build_parser = _command_parser(subparsers, "build")
-    build_parser.add_argument("directory", nargs="?", default=".")
-    build_parser.add_argument("--source-dir")
-    build_parser.add_argument("--output-dir")
-    build_parser.add_argument("--wheels", action=argparse.BooleanOptionalAction, default=None)
-    build_parser.add_argument("--python", action="append")
-    build_parser.add_argument("--platform", action="append", choices=PLATFORMS)
-    build_parser.add_argument("--pip")
-    build_parser.add_argument("--refresh-wheels", action="store_true")
-    build_parser.set_defaults(handler=build_command.run)
+    stage_parser = _command_parser(subparsers, "stage")
+    stage_parser.add_argument("directory", nargs="?", default=".")
+    stage_parser.add_argument("--source-dir")
+    stage_parser.add_argument("--output-dir")
+    stage_parser.add_argument("--wheels", action=argparse.BooleanOptionalAction, default=None)
+    stage_parser.add_argument("--python", action="append")
+    stage_parser.add_argument("--platform", action="append", choices=PLATFORMS)
+    stage_parser.add_argument("--pip")
+    stage_parser.add_argument("--refresh-wheels", action="store_true")
+    stage_parser.set_defaults(handler=stage_command.run)
     return parser
 
 

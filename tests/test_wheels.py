@@ -40,7 +40,7 @@ def test_python_and_platform_normalization() -> None:
         "3.11",
         "3.14",
     )
-    assert wheels.build_id("3.11") == "py3.11"
+    assert wheels.stage_id("3.11") == "py3.11"
     with pytest.raises(BlexError):
         wheels.normalize_python_version("03.11")
     with pytest.raises(BlexError):

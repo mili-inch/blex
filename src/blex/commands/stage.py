@@ -1,4 +1,4 @@
-"""Implementation of ``blex build``."""
+"""Implementation of ``blex stage``."""
 
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ from blex.core.project import (
 )
 from blex.core.wheels import (
     WheelArtifact,
-    build_id,
     current_platform,
     ensure_blex_root,
     ensure_managed_directory,
@@ -39,6 +38,7 @@ from blex.core.wheels import (
     normalize_python_versions,
     remove_managed_tree,
     resolve_wheels,
+    stage_id,
 )
 
 
@@ -54,29 +54,29 @@ class _TargetState:
 
 
 def run(args: argparse.Namespace) -> int:
-    """Build all selected Python staging trees as one transaction."""
+    """Create all selected Python staging trees as one transaction."""
 
     root = resolve_project_root(args.directory, must_exist=True)
     try:
         ensure_blex_root(root)
-        lock_path = root / ".blex" / "locks" / "build.lock"
+        lock_path = root / ".blex" / "locks" / "stage.lock"
         ensure_managed_directory(root, lock_path.parent)
-        with FileLock(lock_path, "build"):
+        with FileLock(lock_path, "stage"):
             _run_locked(args, root)
     except BlexError:
         raise
     except (OSError, UnicodeError, shutil.Error) as error:
-        raise BlexError(f"build filesystem operation failed: {error}") from error
+        raise BlexError(f"stage filesystem operation failed: {error}") from error
     return 0
 
 
 def _run_locked(args: argparse.Namespace, root: Path) -> None:
-    staging_parent = root / ".blex" / "staging" / "build"
+    staging_parent = root / ".blex" / "staging" / "stage"
     ensure_managed_directory(root, staging_parent)
     abandoned = sorted(staging_parent.iterdir(), key=lambda path: path.name)
     if abandoned:
         paths = ", ".join(str(path) for path in abandoned)
-        raise BlexError(f"abandoned build transaction exists: {paths}")
+        raise BlexError(f"abandoned stage transaction exists: {paths}")
 
     project = load_pyproject(root)
     source_value = args.source_dir
@@ -90,21 +90,21 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
     validate_source_tree(source_dir)
     manifest = load_manifest(source_dir)
 
-    automatic = select_value(args.wheels, project.config.build.wheels, True)
+    automatic = select_value(args.wheels, project.config.stage.wheels, True)
     if not automatic and args.refresh_wheels:
         raise BlexError("--refresh-wheels cannot be used with --no-wheels")
 
-    python_values = args.python if args.python is not None else project.config.build.python
+    python_values = args.python if args.python is not None else project.config.stage.python
     if python_values is None:
         python_values = (read_python_version(root),)
     python_versions = normalize_python_versions(python_values)
 
-    platform_values = args.platform if args.platform is not None else project.config.build.platforms
+    platform_values = args.platform if args.platform is not None else project.config.stage.platforms
     if platform_values is None:
         platform_values = (current_platform(),)
     platforms = normalize_platforms(platform_values)
 
-    output_value = select_value(args.output_dir, project.config.build.output_dir, "dist")
+    output_value = select_value(args.output_dir, project.config.stage.output_dir, "dist")
     output_dir = _resolve_output_dir(root, source_dir, output_value, python_versions)
     pip_command = validate_pip_executable_value(select_value(args.pip, project.config.pip, "pip"))
     verbose = bool(getattr(args, "verbose", False))
@@ -122,7 +122,7 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
     try:
         run_root.mkdir()
         for python_version in python_versions:
-            identifier = build_id(python_version)
+            identifier = stage_id(python_version)
             prepared = run_root / "prepared" / identifier
             backup = run_root / "backups" / identifier
             target = output_dir / identifier
@@ -163,7 +163,7 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
                 _rollback(root, run_root, states)
             except BaseException as rollback_error:
                 raise BlexError(
-                    f"build commit failed and rollback was incomplete; "
+                    f"stage commit failed and rollback was incomplete; "
                     f"transaction remains at {run_root}: {rollback_error}"
                 ) from rollback_error
         _remove_empty_directories(created_output_directories)
@@ -261,11 +261,11 @@ def _resolve_output_dir(
             raise BlexError(f"output-dir overlaps protected path {protected_resolved}: {output}")
 
     for python_version in python_versions:
-        target = output / build_id(python_version)
+        target = output / stage_id(python_version)
         if is_symlink_or_reparse(target):
-            raise BlexError(f"selected build target must not be a symlink: {target}")
+            raise BlexError(f"selected stage target must not be a symlink: {target}")
         if target.exists() and not target.is_dir():
-            raise BlexError(f"selected build target is not a directory: {target}")
+            raise BlexError(f"selected stage target is not a directory: {target}")
     return output
 
 
@@ -328,13 +328,13 @@ def _commit(
     _create_output_directory(output_dir, root, created_output_directories)
     for state in states:
         if is_symlink_or_reparse(state.target):
-            raise BlexError(f"selected build target became a symlink: {state.target}")
+            raise BlexError(f"selected stage target became a symlink: {state.target}")
         state.had_target = state.target.exists()
         state.state = "backup_pending" if state.had_target else "install_pending"
         _write_transaction(run_root, states)
         if state.had_target:
             if not state.target.is_dir():
-                raise BlexError(f"selected build target is not a directory: {state.target}")
+                raise BlexError(f"selected stage target is not a directory: {state.target}")
             state.backup.parent.mkdir(parents=True, exist_ok=True)
             state.target.rename(state.backup)
             state.state = "backed_up"
@@ -361,7 +361,7 @@ def _rollback(root: Path, run_root: Path, states: list[_TargetState]) -> None:
             if state.had_target:
                 if backup_exists:
                     if is_symlink_or_reparse(state.backup) or not state.backup.is_dir():
-                        raise BlexError(f"build backup cannot be restored safely: {state.backup}")
+                        raise BlexError(f"stage backup cannot be restored safely: {state.backup}")
                     if target_exists:
                         if prepared_exists:
                             raise BlexError(
@@ -376,16 +376,16 @@ def _rollback(root: Path, run_root: Path, states: list[_TargetState]) -> None:
                     state.backup.rename(state.target)
                 else:
                     if not target_exists or is_symlink_or_reparse(state.target):
-                        raise BlexError(f"original build target is missing: {state.target}")
+                        raise BlexError(f"original stage target is missing: {state.target}")
                     if not state.target.is_dir():
-                        raise BlexError(f"original build target is invalid: {state.target}")
+                        raise BlexError(f"original stage target is invalid: {state.target}")
                     if not prepared_exists:
                         raise BlexError(
-                            f"prepared build target is missing without a backup: {state.prepared}"
+                            f"prepared stage target is missing without a backup: {state.prepared}"
                         )
             else:
                 if backup_exists:
-                    raise BlexError(f"unexpected backup for a new build target: {state.backup}")
+                    raise BlexError(f"unexpected backup for a new stage target: {state.backup}")
                 if target_exists:
                     if prepared_exists:
                         raise BlexError(
@@ -393,12 +393,12 @@ def _rollback(root: Path, run_root: Path, states: list[_TargetState]) -> None:
                         )
                     if is_symlink_or_reparse(state.target) or not state.target.is_dir():
                         raise BlexError(
-                            f"new build target cannot be rolled back safely: {state.target}"
+                            f"new stage target cannot be rolled back safely: {state.target}"
                         )
                     state.prepared.parent.mkdir(parents=True, exist_ok=True)
                     state.target.rename(state.prepared)
                 elif not prepared_exists:
-                    raise BlexError(f"new prepared build target is missing: {state.prepared}")
+                    raise BlexError(f"new prepared stage target is missing: {state.prepared}")
             state.state = "rolled_back"
             _write_transaction(run_root, states)
         except (OSError, BlexError) as error:

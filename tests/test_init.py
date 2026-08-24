@@ -54,6 +54,7 @@ def test_init_creates_complete_project(tmp_path: Path) -> None:
     assert pyproject["project"]["name"] == "my-extension"
     assert pyproject["project"]["requires-python"] == ">=3.11"
     assert pyproject["tool"]["blex"]["source-dir"] == "src/my_extension"
+    assert pyproject["tool"]["blex"]["stage"]["output-dir"] == "dist"
     assert "build-system" not in pyproject
 
     manifest_text = (root / "src/my_extension/blender_manifest.toml").read_text(encoding="utf-8")

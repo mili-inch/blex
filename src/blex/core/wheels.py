@@ -81,7 +81,7 @@ def normalize_python_versions(values: Sequence[str]) -> tuple[str, ...]:
     )
 
 
-def build_id(python_version: str) -> str:
+def stage_id(python_version: str) -> str:
     return f"py{normalize_python_version(python_version)}"
 
 
