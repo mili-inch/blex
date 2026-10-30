@@ -11,6 +11,7 @@ import zipfile
 import pytest
 import tomlkit
 
+from blex.core import wheels
 from blex.main import main
 
 
@@ -177,6 +178,43 @@ def test_linux_accepts_older_manylinux_and_stage_keeps_platform_versions_separat
         files = list((source / "wheels").glob("*.whl"))
         assert len(files) == 2
         assert all(path.name.split("-")[1] == version for path in files)
+
+
+def test_refresh_preserves_previously_resolved_wheel_and_runtime_link(
+    tmp_path: Path, local_index: Path, pip_executable: Path
+) -> None:
+    make_wheel(local_index, "refreshprobe", "1.0")
+    root = tmp_path / "project"
+    source = _project(root, ["refreshprobe"])
+
+    def resolve(refresh: bool) -> tuple[wheels.WheelArtifact, ...]:
+        return wheels.resolve_wheels(
+            project_root=root,
+            source_dir=source,
+            manifest={},
+            dependencies=("refreshprobe",),
+            python_version="3.11",
+            platform_name="windows-x64",
+            automatic=True,
+            pip_command=str(pip_executable),
+            uv_command=_uv(),
+            refresh=refresh,
+        )
+
+    first = resolve(False)[0]
+    before = first.source.read_bytes()
+    runtime_link = root / "running-wheel.whl"
+    try:
+        runtime_link.symlink_to(first.source)
+    except OSError:
+        # The immutable path is also used by copy deployment on hosts without symlinks.
+        runtime_link = first.source
+    make_wheel(local_index, "refreshprobe", "2.0")
+    second = resolve(True)[0]
+    assert second.source.name == "refreshprobe-2.0-py3-none-any.whl"
+    assert first.source != second.source
+    assert first.source.read_bytes() == before
+    assert runtime_link.read_bytes() == before
 
 
 def test_failed_target_does_not_replace_any_existing_stages(

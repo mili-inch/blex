@@ -1,4 +1,4 @@
-"""Wheel target validation, cache resolution, and target artifacts."""
+"""Wheel target validation, cache resolution, and immutable artifact publication."""
 
 from __future__ import annotations
 
@@ -314,7 +314,7 @@ def _resolve_cached_target(
                     dependencies=dependencies,
                 )
                 print(f"Wheel cache hit: {entry}")
-                return wheels
+                return _freeze_wheels(project_root, wheels)
 
         if verbose:
             action = "refresh" if had_entry else "miss"
@@ -388,7 +388,7 @@ def _resolve_cached_target(
                     "Wheel cache entry was installed, but its previous backup "
                     f"could not be removed: {backup}: {exc}"
                 ) from exc
-        return validate_cache_entry(
+        installed = validate_cache_entry(
             entry,
             fingerprint=fingerprint,
             python_version=python_version,
@@ -399,6 +399,37 @@ def _resolve_cached_target(
             uv_version=uv_version,
             dependencies=dependencies,
         )
+        return _freeze_wheels(project_root, installed)
+
+
+def _freeze_wheels(project_root: Path, wheels: Sequence[CachedWheel]) -> tuple[CachedWheel, ...]:
+    """Publish immutable Wheel objects while the cache entry lock is still held."""
+    result = []
+    for wheel in wheels:
+        directory = project_root / ".blex" / "wheel-objects" / wheel.sha256
+        ensure_managed_directory(project_root, directory)
+        lock = project_root / ".blex" / "locks" / "wheel-objects" / f"{wheel.sha256}.lock"
+        ensure_managed_directory(project_root, lock.parent)
+        target = directory / wheel.filename
+        with FileLock(lock, "Wheel object"):
+            if _is_link_or_reparse(target):
+                raise BlexError(f"immutable Wheel object must not be a symlink: {target}")
+            if target.exists():
+                if not target.is_file() or sha256_file(target) != wheel.sha256:
+                    raise BlexError(f"immutable Wheel object is corrupt: {target}")
+            else:
+                temporary = directory / f".tmp-{uuid.uuid4().hex}"
+                try:
+                    shutil.copy2(wheel.path, temporary)
+                    if sha256_file(temporary) != wheel.sha256:
+                        raise BlexError(
+                            f"Wheel changed while creating immutable object: {wheel.path}"
+                        )
+                    temporary.rename(target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        result.append(CachedWheel(target, wheel.filename, wheel.sha256))
+    return tuple(result)
 
 
 def _rollback_cache_replacement(

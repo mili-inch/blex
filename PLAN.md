@@ -939,6 +939,16 @@ fingerprintは、解決方式format 2、順序を保持したdependency文字列
 }
 ```
 
+### 9.10 不変Wheel object
+
+cache entryのlockを保持したまま、検証済みWheelを
+`.blex/wheel-objects/<sha256>/<filename>`へ原子的にcopyする。
+objectごとに`.blex/locks/wheel-objects/<sha256>.lock`を取得する。
+既存objectは通常fileでありhashが一致するときだけ再利用し、破損・linkはエラーにする。
+objectはrefreshでも置換・削除せず、devとstageはこの不変pathを参照する。
+これにより取得から配置までの間のrefresh、および実行中runtimeのsymlinkを保護する。
+自動GCは行わない。手動で`.blex`を削除するときは全dev/stage processを終了しておく。
+
 ## 10. `blex dev`
 
 ### 10.1 CLI
@@ -1270,10 +1280,14 @@ blexがproject内で管理する領域は次のとおりとする。
 ├── locks/
 │   ├── dev.lock
 │   ├── stage.lock
+│   ├── wheel-objects/
+│   │   └── <sha256>.lock
 │   └── wheels/
 │       └── py3.11/
 │           └── windows-x64/
 │               └── <fingerprint>.lock
+├── wheel-objects/
+│   └── <sha256>/<filename>
 ├── runtime_environment/
 ├── staging/
 │   └── stage/

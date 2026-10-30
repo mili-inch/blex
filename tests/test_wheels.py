@@ -381,6 +381,17 @@ def test_fingerprint_tracks_resolver_and_uv_environment(tmp_path: Path) -> None:
     assert fingerprint("uv 1", {}) != fingerprint("uv 1", {"UV_INDEX": "private"})
 
 
+def test_immutable_wheel_rejects_corruption(tmp_path: Path) -> None:
+    wheels.ensure_blex_root(tmp_path)
+    original = tmp_path / "wheel.whl"
+    original.write_bytes(b"wheel")
+    cached = CachedWheel(original, original.name, sha256_file(original))
+    frozen = wheels._freeze_wheels(tmp_path, (cached,))[0]
+    frozen.path.write_bytes(b"corrupt")
+    with pytest.raises(BlexError, match="immutable Wheel object is corrupt"):
+        wheels._freeze_wheels(tmp_path, (cached,))
+
+
 def _cache_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     entry = tmp_path / "entry"
     entry.mkdir()

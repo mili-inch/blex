@@ -221,7 +221,10 @@ files, and pip-specific options are not supported.
 
 `--no-wheels` disables automatic collection. Wheels explicitly listed in the
 source manifest are still validated and included. Downloaded Wheels are cached
-under `.blex/wheels`; use `--refresh-wheels` to re-resolve unchanged dependency
+under `.blex/wheels`. Deployments reference immutable copies under
+`.blex/wheel-objects`, so refreshing the cache cannot break a running Blender
+session. These objects are retained until `.blex` is manually removed with all
+dev/stage processes stopped. Use `--refresh-wheels` to re-resolve unchanged dependency
 requirements, including after changing pip configuration or when a newer
 unfixed release should be selected.
 
