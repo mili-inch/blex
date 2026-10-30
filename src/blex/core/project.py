@@ -258,9 +258,8 @@ def validate_source_tree(source_dir: Path) -> None:
     visit(source, frozenset({root_identity}))
 
 
-def resolve_executable(value: str, root: Path, label: str) -> Path:
-    """Resolve an executable path or a command name exactly as configured."""
-
+def validate_executable_value(value: str, label: str) -> str:
+    """Validate an executable setting even when its feature is disabled."""
     if not isinstance(value, str) or not value.strip():
         raise ProjectError(f"{label} must be a non-empty executable path or command name")
     if "\x00" in value:
@@ -269,6 +268,12 @@ def resolve_executable(value: str, root: Path, label: str) -> Path:
         PureWindowsPath(value).drive and not PureWindowsPath(value).is_absolute()
     ):
         raise ProjectError(f"{label} uses a drive-relative path, which is not supported: {value}")
+    return value
+
+
+def resolve_executable(value: str, root: Path, label: str) -> Path:
+    """Resolve an executable path or a command name exactly as configured."""
+    value = validate_executable_value(value, label)
 
     path_like = Path(value).is_absolute() or "/" in value or "\\" in value
     if path_like:

@@ -7,7 +7,9 @@ import os
 from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
+import tempfile
 
+from blex.adapters.uv import resolve_requirements
 from blex.core.cache import CachedWheel, sha256_file
 from blex.core.errors import BlexError
 
@@ -74,12 +76,51 @@ def download_wheels(
     dependencies: Sequence[str],
     python_version: str,
     abi: str,
-    pip_platform: str,
+    pip_platforms: Sequence[str],
+    uv_executable: Path,
+    platform_name: str,
     destination: Path,
     verbose: bool = False,
 ) -> tuple[CachedWheel, ...]:
     """Download binary Wheels for exactly one Python/Platform target."""
 
+    with tempfile.TemporaryDirectory(prefix=".resolve-", dir=destination.parent) as work:
+        requirements = resolve_requirements(
+            uv_executable,
+            dependencies=dependencies,
+            python_version=python_version,
+            platform_name=platform_name,
+            work_dir=Path(work),
+            verbose=verbose,
+        )
+        _download_locked(
+            executable,
+            requirements=requirements,
+            python_version=python_version,
+            abi=abi,
+            pip_platforms=pip_platforms,
+            destination=destination,
+            verbose=verbose,
+        )
+
+    wheels: list[CachedWheel] = []
+    for child in sorted(destination.iterdir(), key=lambda path: path.name):
+        if child.is_symlink() or not child.is_file() or not child.name.endswith(".whl"):
+            raise BlexError(f"pip created an unexpected download artifact: {child}")
+        wheels.append(CachedWheel(child, child.name, sha256_file(child)))
+    return tuple(wheels)
+
+
+def _download_locked(
+    executable: Path,
+    *,
+    requirements: Path,
+    python_version: str,
+    abi: str,
+    pip_platforms: Sequence[str],
+    destination: Path,
+    verbose: bool,
+) -> None:
     command = [
         str(executable),
         "download",
@@ -94,14 +135,16 @@ def download_wheels(
         "abi3",
         "--abi",
         "none",
-        "--platform",
-        pip_platform,
+        *[argument for platform in pip_platforms for argument in ("--platform", platform)],
         "--dest",
         str(destination),
         "--disable-pip-version-check",
         "--no-input",
         "--no-cache-dir",
-        *dependencies,
+        "--no-deps",
+        "--require-hashes",
+        "--requirement",
+        str(requirements),
     ]
     if verbose:
         print(f"pip download command: {subprocess.list2cmdline(command)}")
@@ -111,13 +154,6 @@ def download_wheels(
         raise BlexError(f"failed to execute pip: {executable}: {error}") from error
     if result.returncode != 0:
         raise BlexError(f"pip download failed with exit code {result.returncode}")
-
-    wheels: list[CachedWheel] = []
-    for child in sorted(destination.iterdir(), key=lambda path: path.name):
-        if child.is_symlink() or not child.is_file() or not child.name.endswith(".whl"):
-            raise BlexError(f"pip created an unexpected download artifact: {child}")
-        wheels.append(CachedWheel(child, child.name, sha256_file(child)))
-    return tuple(wheels)
 
 
 def _process_details(stdout: str, stderr: str) -> str:

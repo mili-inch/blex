@@ -61,6 +61,7 @@ def _args(root: Path, **overrides: object) -> argparse.Namespace:
         "python": None,
         "platform": ["windows-x64"],
         "pip": None,
+        "uv": None,
         "refresh_wheels": False,
         "verbose": False,
     }
@@ -74,7 +75,7 @@ def test_stage_creates_final_source_without_changing_original(tmp_path: Path) ->
 
     assert stage.run(_args(root)) == 0
 
-    target = root / "dist" / "py3.11" / "source"
+    target = root / "dist" / "py3.11" / "windows-x64" / "source"
     assert (target / "__init__.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert (target / ".hidden").is_file()
     assert (target / "__pycache__" / "kept.pyc").is_file()
@@ -98,7 +99,7 @@ def test_configured_source_does_not_derive_an_unused_default(tmp_path: Path) -> 
     )
 
     assert stage.run(_args(root)) == 0
-    assert (root / "dist" / "py3.11" / "source" / "blender_manifest.toml").is_file()
+    assert (root / "dist" / "py3.11" / "windows-x64" / "source" / "blender_manifest.toml").is_file()
 
 
 def test_stage_sorts_python_targets_and_preserves_unselected_output(tmp_path: Path) -> None:
@@ -110,8 +111,8 @@ def test_stage_sorts_python_targets_and_preserves_unselected_output(tmp_path: Pa
 
     assert stage.run(_args(root, python=["3.14", "3.11"])) == 0
 
-    assert (root / "dist" / "py3.11" / "source").is_dir()
-    assert (root / "dist" / "py3.14" / "source").is_dir()
+    assert (root / "dist" / "py3.11" / "windows-x64" / "source").is_dir()
+    assert (root / "dist" / "py3.14" / "windows-x64" / "source").is_dir()
     assert marker.read_text(encoding="utf-8") == "keep"
 
 
@@ -124,7 +125,7 @@ def test_restage_replaces_selected_output(tmp_path: Path) -> None:
     assert stage.run(_args(root)) == 0
 
     assert not marker.exists()
-    assert (root / "dist" / "py3.11" / "source").is_dir()
+    assert (root / "dist" / "py3.11" / "windows-x64" / "source").is_dir()
 
 
 def test_stage_uses_current_platform_and_verbose_output(
@@ -155,6 +156,10 @@ def test_stage_rejects_missing_source_and_refresh_without_wheels(tmp_path: Path)
 
 def test_stage_without_wheels_validates_but_does_not_resolve_pip(tmp_path: Path) -> None:
     root, _source = _project(tmp_path)
+    with pytest.raises(BlexError, match="uv.*non-empty"):
+        stage.run(_args(root, uv=""))
+    with pytest.raises(BlexError, match="drive-relative"):
+        stage.run(_args(root, uv="C:uv.exe"))
     with pytest.raises(BlexError, match="pip executable must not be empty"):
         stage.run(_args(root, pip=" \t "))
     with pytest.raises(BlexError, match="drive-relative"):

@@ -9,6 +9,7 @@ Blender's supported targets, and creates release staging trees without Blender.
 - Python 3.11 or newer
 - [`uv`](https://docs.astral.sh/uv/) for contributor setup
 - Blender 4.2 or newer when running `blex dev`
+- `uv` and `pip` executables for automatic Wheel collection (tested with uv 0.12.1)
 
 ## Install and run
 
@@ -111,6 +112,7 @@ to its generated manifest ID:
 source-dir = "src/my_extension"
 blender = "blender"
 pip = "pip"
+uv = "uv"
 
 [tool.blex.dev]
 link-mode = "auto"
@@ -162,6 +164,7 @@ blex dev [DIRECTORY]
     [--wheels | --no-wheels]
     [--python X.Y]
     [--pip EXECUTABLE]
+    [--uv EXECUTABLE]
     [--refresh-wheels]
     [-- <BLENDER_ARGS>...]
 ```
@@ -205,7 +208,14 @@ blex dev --debugpy --debugpy-host 127.0.0.1 --debugpy-port 5678
 Automatic Wheel collection is enabled by default for `dev` and `stage`. Its
 only dependency input is `[project].dependencies`; optional dependencies and
 dependency groups are not collected. Dependencies must be index-resolvable PEP
-508 requirements with binary Wheels. Direct URLs, VCS requirements, local
+508 requirements with binary Wheels. `uv pip compile` resolves direct and transitive
+markers for the requested Python and platform. `pip download --no-deps
+--require-hashes` then fetches that exact dependency closure. Configure `--uv` or
+`[tool.blex].uv` to select the uv executable. uv configuration-file discovery is
+disabled; configure private indexes for both tools using their `UV_*` and `PIP_*`
+environment variables (pip also reads its standard configuration files). Hash
+mismatches fail rather than selecting different artifacts. No target Python
+interpreter is downloaded. Direct URLs, VCS requirements, local
 files, local directories, editable installs, requirements files, constraints
 files, and pip-specific options are not supported.
 
@@ -240,11 +250,12 @@ blex stage [DIRECTORY]
     [--python X.Y]...
     [--platform PLATFORM]...
     [--pip EXECUTABLE]
+    [--uv EXECUTABLE]
     [--refresh-wheels]
 ```
 
 For example, the following creates staging trees for two Python versions and
-collects the union of the Windows x64 and macOS ARM64 Wheels for each one:
+keeps separate Windows x64 and macOS ARM64 sources for each one:
 
 ```console
 blex stage --python 3.11 --python 3.12 --platform windows-x64 --platform macos-arm64
@@ -256,17 +267,26 @@ version:
 ```text
 dist/
 └── py3.11/
-    └── source/
-        ├── blender_manifest.toml
-        ├── <Extension source entries>
-        └── wheels/
+    ├── windows-x64/
+    │   └── source/
+    │       ├── blender_manifest.toml
+    │       ├── <Extension source entries>
+    │       └── wheels/
+    └── macos-arm64/
+        └── source/
+            ├── blender_manifest.toml
+            ├── <Extension source entries>
+            └── wheels/
 ```
 
-Multiple platforms are combined in the same Python source tree rather than
-split into platform directories. The generated manifest records the selected
-platforms and merged Wheels. Only selected `pyX.Y` target directories are
-replaced; unselected Python staging trees and other files in the output directory are
-left unchanged.
+Each source tree contains only its target's resolved dependency versions, and its
+manifest declares one platform. Linux targets accept the full manylinux tag set
+compatible with glibc 2.28, including manylinux2014. macOS targets use an 11.0
+baseline.
+
+Only selected `pyX.Y` directories are replaced, as one transaction. Their platform
+subdirectories match the requested platform list exactly. Unselected Python trees
+and other files in the output directory are left unchanged.
 
 The staging copy includes all content under the source directory, including
 hidden files and `__pycache__`; manifest `paths_exclude_pattern` entries are not

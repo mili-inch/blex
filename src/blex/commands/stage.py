@@ -28,6 +28,7 @@ from blex.core.project import (
     resolve_project_root,
     resolve_source_dir,
     validate_source_tree,
+    validate_executable_value,
 )
 from blex.core.wheels import (
     WheelArtifact,
@@ -107,6 +108,7 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
     output_value = select_value(args.output_dir, project.config.stage.output_dir, "dist")
     output_dir = _resolve_output_dir(root, source_dir, output_value, python_versions)
     pip_command = validate_pip_executable_value(select_value(args.pip, project.config.pip, "pip"))
+    uv_command = validate_executable_value(select_value(args.uv, project.config.uv, "uv"), "uv")
     verbose = bool(getattr(args, "verbose", False))
     if verbose:
         print(f"project root: {root}")
@@ -126,25 +128,27 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
             prepared = run_root / "prepared" / identifier
             backup = run_root / "backups" / identifier
             target = output_dir / identifier
-            artifacts = resolve_wheels(
-                project_root=root,
-                source_dir=source_dir,
-                manifest=manifest.document,
-                dependencies=project.dependencies,
-                python_version=python_version,
-                platforms=platforms,
-                automatic=automatic,
-                pip_command=pip_command,
-                refresh=args.refresh_wheels,
-                verbose=verbose,
-            )
-            _prepare_target(
-                source_dir=source_dir,
-                prepared=prepared,
-                manifest_document=manifest.document,
-                platforms=platforms,
-                artifacts=artifacts,
-            )
+            for platform_name in platforms:
+                artifacts = resolve_wheels(
+                    project_root=root,
+                    source_dir=source_dir,
+                    manifest=manifest.document,
+                    dependencies=project.dependencies,
+                    python_version=python_version,
+                    platform_name=platform_name,
+                    automatic=automatic,
+                    pip_command=pip_command,
+                    uv_command=uv_command,
+                    refresh=args.refresh_wheels,
+                    verbose=verbose,
+                )
+                _prepare_target(
+                    source_dir=source_dir,
+                    prepared=prepared / platform_name,
+                    manifest_document=manifest.document,
+                    platforms=(platform_name,),
+                    artifacts=artifacts,
+                )
             states.append(
                 _TargetState(
                     python=python_version,
@@ -179,7 +183,7 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
             remove_managed_tree(root, run_root)
         _remove_empty_directories(created_output_directories)
         for state in states:
-            print(f"Built {state.identifier}: {state.target / 'source'}")
+            print(f"Built {state.identifier}: {state.target}")
 
 
 def _prepare_target(

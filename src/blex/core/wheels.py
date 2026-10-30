@@ -1,4 +1,4 @@
-"""Wheel target validation, cache resolution, and artifact union."""
+"""Wheel target validation, cache resolution, and target artifacts."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from typing import Any
 import uuid
 
 from blex.adapters.pip import download_wheels, get_pip_version, resolve_pip_executable
+from blex.adapters.uv import get_uv_version
+from blex.core.project import resolve_executable
 from blex.core.cache import (
     CachedWheel,
     FileLock,
@@ -34,11 +36,12 @@ SUPPORTED_PLATFORMS = (
 )
 
 PIP_PLATFORMS = {
-    "windows-x64": "win_amd64",
-    "windows-arm64": "win_arm64",
-    "macos-x64": "macosx_11_0_x86_64",
-    "macos-arm64": "macosx_11_0_arm64",
-    "linux-x64": "manylinux_2_28_x86_64",
+    "windows-x64": ("win_amd64",),
+    "windows-arm64": ("win_arm64",),
+    "macos-x64": ("macosx_11_0_x86_64",),
+    "macos-arm64": ("macosx_11_0_arm64",),
+    "linux-x64": tuple(f"manylinux_2_{minor}_x86_64" for minor in range(28, 4, -1))
+    + ("manylinux2014_x86_64", "manylinux2010_x86_64", "manylinux1_x86_64"),
 }
 
 _PYTHON_VERSION = re.compile(r"([1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
@@ -123,7 +126,11 @@ def validate_dependencies(dependencies: Sequence[str]) -> None:
     """Reject pip-only and non-index requirement forms before pip runs."""
 
     for dependency in dependencies:
-        if not isinstance(dependency, str) or not dependency.strip() or "\0" in dependency:
+        if (
+            not isinstance(dependency, str)
+            or not dependency.strip()
+            or any(character in dependency for character in "\0\r\n")
+        ):
             raise BlexError("project dependencies must contain non-empty strings")
         value = dependency.strip()
         requirement = value.partition(";")[0].strip()
@@ -151,9 +158,10 @@ def resolve_wheels(
     manifest: Mapping[str, Any],
     dependencies: Sequence[str],
     python_version: str | None,
-    platforms: Sequence[str],
+    platform_name: str,
     automatic: bool,
     pip_command: str,
+    uv_command: str,
     refresh: bool,
     verbose: bool = False,
 ) -> tuple[WheelArtifact, ...]:
@@ -173,33 +181,31 @@ def resolve_wheels(
     if python_version is None:
         raise BlexError("a Python target is required when automatic Wheels are enabled")
     normalized_python = normalize_python_version(python_version)
-    normalized_platforms = normalize_platforms(platforms)
+    normalize_platforms((platform_name,))
     validate_dependencies(dependencies)
     if not dependencies:
         return _merge_artifacts(manual)
 
     pip_executable = resolve_pip_executable(pip_command, project_root)
     pip_version = get_pip_version(pip_executable, verbose=verbose)
-    automatic_wheels: list[WheelArtifact] = []
-    for platform_name in normalized_platforms:
-        cached = _resolve_cached_target(
-            project_root=project_root,
-            dependencies=dependencies,
-            python_version=normalized_python,
-            platform_name=platform_name,
-            pip_executable=pip_executable,
-            pip_version=pip_version,
-            refresh=refresh,
-            verbose=verbose,
-        )
-        automatic_wheels.extend(
-            WheelArtifact(
-                wheel.path,
-                PurePosixPath("wheels", wheel.filename),
-                wheel.sha256,
-            )
-            for wheel in cached
-        )
+    uv_executable = resolve_executable(uv_command, project_root, "uv")
+    uv_version = get_uv_version(uv_executable, verbose=verbose)
+    cached = _resolve_cached_target(
+        project_root=project_root,
+        dependencies=dependencies,
+        python_version=normalized_python,
+        platform_name=platform_name,
+        pip_executable=pip_executable,
+        pip_version=pip_version,
+        uv_executable=uv_executable,
+        uv_version=uv_version,
+        refresh=refresh,
+        verbose=verbose,
+    )
+    automatic_wheels = [
+        WheelArtifact(wheel.path, PurePosixPath("wheels", wheel.filename), wheel.sha256)
+        for wheel in cached
+    ]
     return _merge_artifacts((*manual, *automatic_wheels))
 
 
@@ -268,6 +274,8 @@ def _resolve_cached_target(
     platform_name: str,
     pip_executable: Path,
     pip_version: str,
+    uv_executable: Path,
+    uv_version: str,
     refresh: bool,
     verbose: bool,
 ) -> tuple[CachedWheel, ...]:
@@ -277,6 +285,8 @@ def _resolve_cached_target(
         platform_name,
         pip_executable,
         pip_version,
+        uv_executable=uv_executable,
+        uv_version=uv_version,
     )
     entry = cache_entry_path(project_root, python_version, platform_name, fingerprint)
     lock_path = cache_lock_path(project_root, python_version, platform_name, fingerprint)
@@ -299,6 +309,8 @@ def _resolve_cached_target(
                     platform_name=platform_name,
                     pip_executable=pip_executable,
                     pip_version=pip_version,
+                    uv_executable=uv_executable,
+                    uv_version=uv_version,
                     dependencies=dependencies,
                 )
                 print(f"Wheel cache hit: {entry}")
@@ -318,7 +330,9 @@ def _resolve_cached_target(
                 dependencies=dependencies,
                 python_version=python_version,
                 abi=abi,
-                pip_platform=PIP_PLATFORMS[platform_name],
+                pip_platforms=PIP_PLATFORMS[platform_name],
+                uv_executable=uv_executable,
+                platform_name=platform_name,
                 destination=temporary,
                 verbose=verbose,
             )
@@ -329,6 +343,8 @@ def _resolve_cached_target(
                 platform_name=platform_name,
                 pip_executable=pip_executable,
                 pip_version=pip_version,
+                uv_executable=uv_executable,
+                uv_version=uv_version,
                 dependencies=dependencies,
                 wheels=downloaded,
             )
@@ -339,6 +355,8 @@ def _resolve_cached_target(
                 platform_name=platform_name,
                 pip_executable=pip_executable,
                 pip_version=pip_version,
+                uv_executable=uv_executable,
+                uv_version=uv_version,
                 dependencies=dependencies,
             )
             commit_started = True
@@ -377,6 +395,8 @@ def _resolve_cached_target(
             platform_name=platform_name,
             pip_executable=pip_executable,
             pip_version=pip_version,
+            uv_executable=uv_executable,
+            uv_version=uv_version,
             dependencies=dependencies,
         )
 

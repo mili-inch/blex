@@ -71,6 +71,7 @@ def _args(root: Path, blender_path: Path, **overrides: object) -> argparse.Names
         "wheels": None,
         "python": None,
         "pip": None,
+        "uv": None,
         "refresh_wheels": False,
         "blender_args": [],
         "verbose": False,

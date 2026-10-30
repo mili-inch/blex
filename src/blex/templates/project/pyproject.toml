@@ -14,6 +14,7 @@ dependencies = []
 source-dir = "BLEX_SOURCE_DIR"
 blender = "blender"
 pip = "pip"
+uv = "uv"
 
 [tool.blex.dev]
 link-mode = "auto"

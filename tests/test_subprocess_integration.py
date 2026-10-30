@@ -77,6 +77,18 @@ destination.mkdir(parents=True, exist_ok=True)
 (destination / "fake_dependency-1.0-py3-none-any.whl").write_bytes(b"fake wheel")
 """
 
+_FAKE_UV = r"""
+import sys
+from pathlib import Path
+arguments = sys.argv[1:]
+if arguments == ["--version"]:
+    print("uv 99")
+else:
+    Path(arguments[arguments.index("--output-file") + 1]).write_text(
+        "fake-dependency==1 --hash=sha256:" + "0" * 64 + "\n", encoding="utf-8"
+    )
+"""
+
 
 def _python_launcher(tmp_path: Path, name: str, program: str) -> Path:
     if os.name == "nt":
@@ -158,6 +170,7 @@ def _dev_args(root: Path, blender: Path, blend_file: Path) -> argparse.Namespace
         wheels=None,
         python=None,
         pip=None,
+        uv=None,
         refresh_wheels=False,
         blender_args=["--background", "--factory-startup"],
         verbose=False,
@@ -378,50 +391,50 @@ def test_real_fake_pip_exercises_platform_matrix_command_and_inherited_streams(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     executable = _python_launcher(tmp_path, "fake-pip", _FAKE_PIP)
+    uv_executable = _python_launcher(tmp_path, "fake-uv", _FAKE_UV)
     log = tmp_path / "pip.jsonl"
     root, source = _pip_project(tmp_path, "pip-success")
     monkeypatch.setenv("BLEX_FAKE_PIP_LOG", str(log))
     monkeypatch.delenv("BLEX_FAKE_PIP_FAIL_PLATFORM", raising=False)
     monkeypatch.delenv("BLEX_FAKE_PIP_EXIT", raising=False)
 
-    artifacts = wheels.resolve_wheels(
-        project_root=root,
-        source_dir=source,
-        manifest={},
-        dependencies=("fake-dependency==1",),
-        python_version="3.11",
-        platforms=(
-            "windows-x64",
-            "windows-arm64",
-            "macos-x64",
-            "macos-arm64",
-            "linux-x64",
-        ),
-        automatic=True,
-        pip_command=str(executable),
-        refresh=False,
-    )
-    assert [artifact.relative_path.as_posix() for artifact in artifacts] == [
+    platforms = ("windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64")
+    artifacts = []
+    for platform_name in platforms:
+        artifacts.extend(
+            wheels.resolve_wheels(
+                project_root=root,
+                source_dir=source,
+                manifest={},
+                dependencies=("fake-dependency==1",),
+                python_version="3.11",
+                platform_name=platform_name,
+                automatic=True,
+                pip_command=str(executable),
+                uv_command=str(uv_executable),
+                refresh=False,
+            )
+        )
+    assert {artifact.relative_path.as_posix() for artifact in artifacts} == {
         "wheels/fake_dependency-1.0-py3-none-any.whl"
-    ]
+    }
     cached_artifacts = wheels.resolve_wheels(
         project_root=root,
         source_dir=source,
         manifest={},
         dependencies=("fake-dependency==1",),
         python_version="3.11",
-        platforms=("windows-x64", "linux-x64"),
+        platform_name="windows-x64",
         automatic=True,
         pip_command=str(executable),
+        uv_command=str(uv_executable),
         refresh=False,
     )
-    assert [artifact.sha256 for artifact in cached_artifacts] == [
-        artifact.sha256 for artifact in artifacts
-    ]
+    assert cached_artifacts[0].sha256 == artifacts[0].sha256
 
     invocations = _read_json_lines(log)
     assert invocations[0] == ["--version"]
-    assert invocations.count(["--version"]) == 2
+    assert invocations.count(["--version"]) == 6
     downloads = [command for command in invocations if command and command[0] == "download"]
     assert [command[command.index("--platform") + 1] for command in downloads] == [
         "win_amd64",
@@ -432,7 +445,7 @@ def test_real_fake_pip_exercises_platform_matrix_command_and_inherited_streams(
     ]
     for command in downloads:
         assert command[0] == "download"
-        assert command[1:15] == [
+        assert command[1:14] == [
             "--only-binary=:all:",
             "--python-version",
             "3.11",
@@ -446,13 +459,14 @@ def test_real_fake_pip_exercises_platform_matrix_command_and_inherited_streams(
             "none",
             "--platform",
             command[13],
-            "--dest",
         ]
-        assert command[-4:] == [
+        assert command[-7:-1] == [
             "--disable-pip-version-check",
             "--no-input",
             "--no-cache-dir",
-            "fake-dependency==1",
+            "--no-deps",
+            "--require-hashes",
+            "--requirement",
         ]
     captured = capfd.readouterr()
     for pip_platform in (
@@ -472,6 +486,7 @@ def test_real_fake_pip_failure_propagates_exit_and_stops_platform_matrix(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     executable = _python_launcher(tmp_path, "fake-pip", _FAKE_PIP)
+    uv_executable = _python_launcher(tmp_path, "fake-uv", _FAKE_UV)
     log = tmp_path / "pip-failure.jsonl"
     root, source = _pip_project(tmp_path, "pip-failure")
     monkeypatch.setenv("BLEX_FAKE_PIP_LOG", str(log))
@@ -479,20 +494,26 @@ def test_real_fake_pip_failure_propagates_exit_and_stops_platform_matrix(
     monkeypatch.setenv("BLEX_FAKE_PIP_EXIT", "17")
 
     with pytest.raises(BlexError, match="exit code 17"):
-        wheels.resolve_wheels(
-            project_root=root,
-            source_dir=source,
-            manifest={},
-            dependencies=("fake-dependency==1",),
-            python_version="3.12",
-            platforms=("windows-x64", "windows-arm64", "linux-x64"),
-            automatic=True,
-            pip_command=str(executable),
-            refresh=False,
-        )
+        for platform_name in ("windows-x64", "windows-arm64", "linux-x64"):
+            wheels.resolve_wheels(
+                project_root=root,
+                source_dir=source,
+                manifest={},
+                dependencies=("fake-dependency==1",),
+                python_version="3.12",
+                platform_name=platform_name,
+                automatic=True,
+                pip_command=str(executable),
+                uv_command=str(uv_executable),
+                refresh=False,
+            )
     invocations = _read_json_lines(log)
     assert invocations[0] == ["--version"]
-    assert [command[command.index("--platform") + 1] for command in invocations[1:]] == [
+    assert [
+        command[command.index("--platform") + 1]
+        for command in invocations
+        if command[0] == "download"
+    ] == [
         "win_amd64",
         "win_arm64",
     ]

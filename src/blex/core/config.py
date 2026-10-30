@@ -51,6 +51,7 @@ class BlexConfig:
     source_dir: str | None = None
     blender: str | None = None
     pip: str | None = None
+    uv: str | None = None
     dev: DevConfig = DevConfig()
     stage: StageConfig = StageConfig()
 
@@ -209,7 +210,7 @@ def load_config(document: Mapping[str, object]) -> BlexConfig:
     if blex_value is None:
         return BlexConfig()
     blex = _as_mapping(blex_value, "[tool.blex]")
-    _unknown_keys(blex, {"source-dir", "blender", "pip", "dev", "stage"}, "[tool.blex]")
+    _unknown_keys(blex, {"source-dir", "blender", "pip", "uv", "dev", "stage"}, "[tool.blex]")
 
     dev_value = blex.get("dev")
     stage_value = blex.get("stage")
@@ -224,6 +225,7 @@ def load_config(document: Mapping[str, object]) -> BlexConfig:
         source_dir=_optional_string(blex, "source-dir", "[tool.blex]"),
         blender=_optional_string(blex, "blender", "[tool.blex]"),
         pip=_optional_string(blex, "pip", "[tool.blex]"),
+        uv=_optional_string(blex, "uv", "[tool.blex]"),
         dev=dev,
         stage=stage,
     )

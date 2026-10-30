@@ -60,6 +60,7 @@ def create_parser() -> argparse.ArgumentParser:
     dev_parser.add_argument("--wheels", action=argparse.BooleanOptionalAction, default=None)
     dev_parser.add_argument("--python", action="append")
     dev_parser.add_argument("--pip")
+    dev_parser.add_argument("--uv")
     dev_parser.add_argument("--refresh-wheels", action="store_true")
     dev_parser.epilog = "Pass additional Blender arguments after an explicit -- delimiter."
     dev_parser.set_defaults(handler=dev_command.run)
@@ -72,6 +73,7 @@ def create_parser() -> argparse.ArgumentParser:
     stage_parser.add_argument("--python", action="append")
     stage_parser.add_argument("--platform", action="append", choices=PLATFORMS)
     stage_parser.add_argument("--pip")
+    stage_parser.add_argument("--uv")
     stage_parser.add_argument("--refresh-wheels", action="store_true")
     stage_parser.set_defaults(handler=stage_command.run)
     return parser

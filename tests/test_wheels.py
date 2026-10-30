@@ -26,6 +26,19 @@ from blex.core.errors import BlexError
 from blex.core import wheels
 
 
+@pytest.fixture(autouse=True)
+def fake_uv_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wheels, "resolve_executable", lambda value, root, label: root / "fake-uv")
+    monkeypatch.setattr(wheels, "get_uv_version", lambda path, verbose=False: "uv 99")
+
+    def resolve(executable: Path, **arguments: Any) -> Path:
+        path = arguments["work_dir"] / "requirements.txt"
+        path.write_text("demo==1 --hash=sha256:" + "0" * 64 + "\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(pip_adapter, "resolve_requirements", resolve)
+
+
 def _source(tmp_path: Path, manifest_text: str = 'schema_version = "1.0.0"\n') -> Path:
     source = tmp_path / "src" / "extension"
     source.mkdir(parents=True)
@@ -56,11 +69,12 @@ def test_python_and_platform_normalization() -> None:
     assert wheels.current_platform("Darwin", "arm64") == "macos-arm64"
     assert wheels.current_platform("Linux", "AMD64") == "linux-x64"
     assert wheels.PIP_PLATFORMS == {
-        "windows-x64": "win_amd64",
-        "windows-arm64": "win_arm64",
-        "macos-x64": "macosx_11_0_x86_64",
-        "macos-arm64": "macosx_11_0_arm64",
-        "linux-x64": "manylinux_2_28_x86_64",
+        "windows-x64": ("win_amd64",),
+        "windows-arm64": ("win_arm64",),
+        "macos-x64": ("macosx_11_0_x86_64",),
+        "macos-arm64": ("macosx_11_0_arm64",),
+        "linux-x64": tuple(f"manylinux_2_{minor}_x86_64" for minor in range(28, 4, -1))
+        + ("manylinux2014_x86_64", "manylinux2010_x86_64", "manylinux1_x86_64"),
     }
     with pytest.raises(BlexError):
         wheels.current_platform("Linux", "aarch64")
@@ -111,8 +125,10 @@ def test_pip_download_command_and_inherited_streams(
         dependencies=("demo[extra]>=1", 'other; python_version >= "3.11"'),
         python_version="3.11",
         abi="cp311",
-        pip_platform="win_amd64",
+        pip_platforms=("win_amd64",),
         destination=destination,
+        uv_executable=tmp_path / "fake-uv",
+        platform_name="windows-x64",
     )
 
     assert observed == [
@@ -138,8 +154,10 @@ def test_pip_download_command_and_inherited_streams(
                 "--disable-pip-version-check",
                 "--no-input",
                 "--no-cache-dir",
-                "demo[extra]>=1",
-                'other; python_version >= "3.11"',
+                "--no-deps",
+                "--require-hashes",
+                "--requirement",
+                observed[0][0][-1],
             ],
             {"check": False},
         )
@@ -159,8 +177,10 @@ def test_pip_download_failure_is_handled(tmp_path: Path, monkeypatch: pytest.Mon
             dependencies=("demo",),
             python_version="3.11",
             abi="cp311",
-            pip_platform="manylinux_2_28_x86_64",
+            pip_platforms=("manylinux_2_28_x86_64",),
             destination=tmp_path,
+            uv_executable=tmp_path / "fake-uv",
+            platform_name="windows-x64",
         )
 
 
@@ -258,9 +278,11 @@ def test_pip_download_verbose_execution_error_and_unexpected_artifact(
             dependencies=("demo",),
             python_version="3.11",
             abi="cp311",
-            pip_platform="win_amd64",
+            pip_platforms=("win_amd64",),
             destination=tmp_path,
             verbose=True,
+            uv_executable=tmp_path / "fake-uv",
+            platform_name="windows-x64",
         )
     assert "pip download command" in capsys.readouterr().out
 
@@ -276,8 +298,10 @@ def test_pip_download_verbose_execution_error_and_unexpected_artifact(
             dependencies=("demo",),
             python_version="3.11",
             abi="cp311",
-            pip_platform="win_amd64",
+            pip_platforms=("win_amd64",),
             destination=tmp_path,
+            uv_executable=tmp_path / "fake-uv",
+            platform_name="windows-x64",
         )
 
 
@@ -290,6 +314,8 @@ def test_fingerprint_uses_only_all_pip_environment_values(tmp_path: Path) -> Non
         executable,
         "pip 99",
         {"PIP_INDEX_URL": "one", "PIP_TOKEN": "secret", "OTHER": "first"},
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
     )
     unrelated_change = wheel_fingerprint(
         ("demo",),
@@ -298,6 +324,8 @@ def test_fingerprint_uses_only_all_pip_environment_values(tmp_path: Path) -> Non
         executable,
         "pip 99",
         {"PIP_INDEX_URL": "one", "PIP_TOKEN": "secret", "OTHER": "second"},
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
     )
     pip_change = wheel_fingerprint(
         ("demo",),
@@ -306,6 +334,8 @@ def test_fingerprint_uses_only_all_pip_environment_values(tmp_path: Path) -> Non
         executable,
         "pip 99",
         {"PIP_INDEX_URL": "two", "PIP_TOKEN": "secret", "OTHER": "second"},
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
     )
     assert base == unrelated_change
     assert base != pip_change
@@ -334,6 +364,23 @@ def test_managed_gitignore_rejects_dangling_link_without_external_write(tmp_path
     assert (root / ".blex" / ".gitignore").is_symlink()
 
 
+def test_fingerprint_tracks_resolver_and_uv_environment(tmp_path: Path) -> None:
+    def fingerprint(version: str, environment: dict[str, str]) -> str:
+        return wheel_fingerprint(
+            ("demo",),
+            "3.11",
+            "linux-x64",
+            tmp_path / "pip",
+            "pip 99",
+            environment,
+            uv_executable=tmp_path / "uv",
+            uv_version=version,
+        )
+
+    assert fingerprint("uv 1", {}) != fingerprint("uv 2", {})
+    assert fingerprint("uv 1", {}) != fingerprint("uv 1", {"UV_INDEX": "private"})
+
+
 def _cache_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     entry = tmp_path / "entry"
     entry.mkdir()
@@ -346,6 +393,8 @@ def _cache_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
         "platform_name": "windows-x64",
         "pip_executable": executable,
         "pip_version": "pip 99",
+        "uv_executable": tmp_path / "fake-uv",
+        "uv_version": "uv 99",
         "dependencies": ("demo",),
     }
     write_cache_metadata(
@@ -410,6 +459,8 @@ def test_cache_entry_must_be_a_directory(tmp_path: Path) -> None:
             pip_executable=tmp_path / "pip",
             pip_version="pip 99",
             dependencies=(),
+            uv_executable=tmp_path / "fake-uv",
+            uv_version="uv 99",
         )
 
 
@@ -430,10 +481,11 @@ def test_manual_wheels_work_without_a_python_target(tmp_path: Path) -> None:
         manifest=manifest,
         dependencies=("../unsupported",),
         python_version=None,
-        platforms=(),
+        platform_name="windows-x64",
         automatic=False,
         pip_command="missing-pip",
         refresh=False,
+        uv_command="uv",
     )
 
     assert [artifact.manifest_entry for artifact in artifacts] == ["./vendor/demo.whl"]
@@ -448,8 +500,9 @@ def test_wheel_resolution_mode_validation_and_empty_dependencies(tmp_path: Path)
         "source_dir": source,
         "manifest": tomlkit.document(),
         "dependencies": (),
-        "platforms": ("linux-x64",),
+        "platform_name": "linux-x64",
         "pip_command": "missing-pip",
+        "uv_command": "uv",
     }
     assert (
         wheels.resolve_wheels(
@@ -486,10 +539,11 @@ def test_manual_wheel_manifest_shape_and_missing_file(tmp_path: Path) -> None:
             manifest={"wheels": "./demo.whl"},
             dependencies=(),
             python_version=None,
-            platforms=(),
+            platform_name="windows-x64",
             automatic=False,
             pip_command="pip",
             refresh=False,
+            uv_command="uv",
         )
     with pytest.raises(BlexError, match="inside source-dir"):
         wheels.resolve_wheels(
@@ -498,10 +552,11 @@ def test_manual_wheel_manifest_shape_and_missing_file(tmp_path: Path) -> None:
             manifest={"wheels": ["./missing.whl"]},
             dependencies=(),
             python_version=None,
-            platforms=(),
+            platform_name="windows-x64",
             automatic=False,
             pip_command="pip",
             refresh=False,
+            uv_command="uv",
         )
 
 
@@ -537,10 +592,11 @@ def test_invalid_manual_wheel_paths_are_rejected(tmp_path: Path, entry: str) -> 
             manifest=manifest,
             dependencies=(),
             python_version=None,
-            platforms=(),
+            platform_name="windows-x64",
             automatic=False,
             pip_command="pip",
             refresh=False,
+            uv_command="uv",
         )
 
 
@@ -555,10 +611,11 @@ def test_nested_drive_relative_manual_wheel_cannot_reset_windows_join(tmp_path: 
             manifest={"wheels": ["wheels/C:demo.whl"]},
             dependencies=(),
             python_version=None,
-            platforms=(),
+            platform_name="windows-x64",
             automatic=False,
             pip_command="pip",
             refresh=False,
+            uv_command="uv",
         )
 
 
@@ -578,12 +635,14 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
         dependencies: tuple[str, ...],
         python_version: str,
         abi: str,
-        pip_platform: str,
+        pip_platforms: tuple[str, ...],
+        uv_executable: Path,
+        platform_name: str,
         destination: Path,
         verbose: bool,
     ) -> tuple[CachedWheel, ...]:
         del dependencies, python_version, abi, verbose
-        calls.append(pip_platform)
+        calls.append(pip_platforms[0])
         path = destination / "demo-1-py3-none-any.whl"
         path.write_bytes(b"wheel")
         return (CachedWheel(path, path.name, sha256_file(path)),)
@@ -595,9 +654,10 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
         "manifest": tomlkit.document(),
         "dependencies": ("demo>=1",),
         "python_version": "3.11",
-        "platforms": ("windows-x64",),
+        "platform_name": "windows-x64",
         "automatic": True,
         "pip_command": "fake-pip",
+        "uv_command": "uv",
         "refresh": False,
     }
 
@@ -606,7 +666,15 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
     assert calls == ["win_amd64"]
     assert first[0].sha256 == second[0].sha256
 
-    fingerprint = wheel_fingerprint(("demo>=1",), "3.11", "windows-x64", fake_pip, "pip 99")
+    fingerprint = wheel_fingerprint(
+        ("demo>=1",),
+        "3.11",
+        "windows-x64",
+        fake_pip,
+        "pip 99",
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
+    )
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     assert "must-not-be-persisted" not in (entry / "metadata.json").read_text(encoding="utf-8")
     (entry / first[0].source.name).write_bytes(b"corrupt")
@@ -641,11 +709,13 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         dependencies: tuple[str, ...],
         python_version: str,
         abi: str,
-        pip_platform: str,
+        pip_platforms: tuple[str, ...],
+        uv_executable: Path,
+        platform_name: str,
         destination: Path,
         verbose: bool,
     ) -> tuple[CachedWheel, ...]:
-        del dependencies, python_version, abi, pip_platform, verbose
+        del dependencies, python_version, abi, pip_platforms, verbose
         path = destination / "demo-1-py3-none-any.whl"
         path.write_bytes(content)
         return (CachedWheel(path, path.name, sha256_file(path)),)
@@ -658,6 +728,8 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         "platform_name": platform_name,
         "pip_executable": fake_pip,
         "pip_version": pip_version,
+        "uv_executable": tmp_path / "fake-uv",
+        "uv_version": "uv 99",
         "verbose": False,
     }
     wheels._resolve_cached_target(**arguments, refresh=False)
@@ -667,6 +739,8 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         platform_name,
         fake_pip,
         pip_version,
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
     )
     entry = cache_entry_path(tmp_path, python_version, platform_name, fingerprint)
     original_rename = Path.rename
@@ -701,6 +775,8 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
             pip_executable=fake_pip,
             pip_version=pip_version,
             dependencies=dependencies,
+            uv_executable=tmp_path / "fake-uv",
+            uv_version="uv 99",
         )[0].path
         == wheel_path
     )
@@ -725,6 +801,8 @@ def test_cache_temporary_creation_interrupt_cleans_created_directory(
         "windows-x64",
         fake_pip,
         "pip 99",
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
     )
     original_mkdir = Path.mkdir
     interrupted = False
@@ -752,6 +830,8 @@ def test_cache_temporary_creation_interrupt_cleans_created_directory(
             pip_version="pip 99",
             refresh=False,
             verbose=False,
+            uv_executable=tmp_path / "fake-uv",
+            uv_version="uv 99",
         )
 
     assert interrupted is True
@@ -775,11 +855,13 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         dependencies: tuple[str, ...],
         python_version: str,
         abi: str,
-        pip_platform: str,
+        pip_platforms: tuple[str, ...],
+        uv_executable: Path,
+        platform_name: str,
         destination: Path,
         verbose: bool,
     ) -> tuple[CachedWheel, ...]:
-        del dependencies, python_version, abi, pip_platform, verbose
+        del dependencies, python_version, abi, pip_platforms, verbose
         path = destination / "demo-1-py3-none-any.whl"
         path.write_bytes(content)
         return (CachedWheel(path, path.name, sha256_file(path)),)
@@ -792,6 +874,8 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         "platform_name": "windows-x64",
         "pip_executable": fake_pip,
         "pip_version": "pip 99",
+        "uv_executable": tmp_path / "fake-uv",
+        "uv_version": "uv 99",
         "verbose": False,
     }
     wheels._resolve_cached_target(**arguments, refresh=False)
@@ -814,6 +898,8 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         "windows-x64",
         fake_pip,
         "pip 99",
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
     )
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     assert (entry / "demo-1-py3-none-any.whl").read_bytes() == b"new"
@@ -829,7 +915,15 @@ def test_refresh_rejects_reparse_cache_entry_before_download(
     fake_pip = tmp_path / "fake-pip"
     fake_pip.write_bytes(b"pip")
     dependencies = ("demo>=1",)
-    fingerprint = wheel_fingerprint(dependencies, "3.11", "windows-x64", fake_pip, "pip 99")
+    fingerprint = wheel_fingerprint(
+        dependencies,
+        "3.11",
+        "windows-x64",
+        fake_pip,
+        "pip 99",
+        uv_executable=tmp_path / "fake-uv",
+        uv_version="uv 99",
+    )
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     entry.mkdir(parents=True)
 
@@ -849,53 +943,11 @@ def test_refresh_rejects_reparse_cache_entry_before_download(
             pip_version="pip 99",
             refresh=True,
             verbose=False,
+            uv_executable=tmp_path / "fake-uv",
+            uv_version="uv 99",
         )
 
     assert entry.is_dir()
-
-
-def test_platform_union_deduplicates_and_detects_content_conflict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = _source(tmp_path)
-    fake_pip = tmp_path / "fake-pip"
-    fake_pip.write_bytes(b"pip")
-    monkeypatch.setattr(wheels, "resolve_pip_executable", lambda _value, _root: fake_pip)
-    monkeypatch.setattr(wheels, "get_pip_version", lambda _path, verbose=False: "pip 99")
-    different = False
-
-    def fake_download(
-        _executable: Path,
-        *,
-        dependencies: tuple[str, ...],
-        python_version: str,
-        abi: str,
-        pip_platform: str,
-        destination: Path,
-        verbose: bool,
-    ) -> tuple[CachedWheel, ...]:
-        del dependencies, python_version, abi, verbose
-        path = destination / "demo.whl"
-        content = pip_platform.encode() if different else b"same"
-        path.write_bytes(content)
-        return (CachedWheel(path, path.name, sha256_file(path)),)
-
-    monkeypatch.setattr(wheels, "download_wheels", fake_download)
-    options = {
-        "project_root": tmp_path,
-        "source_dir": source,
-        "manifest": tomlkit.document(),
-        "dependencies": ("demo",),
-        "python_version": "3.11",
-        "platforms": ("windows-x64", "linux-x64"),
-        "automatic": True,
-        "pip_command": "fake-pip",
-        "refresh": True,
-    }
-    assert len(wheels.resolve_wheels(**options)) == 1
-    different = True
-    with pytest.raises(BlexError, match="conflict"):
-        wheels.resolve_wheels(**options)
 
 
 def test_failed_download_removes_temporary_cache_entry(
@@ -918,11 +970,12 @@ def test_failed_download_removes_temporary_cache_entry(
             manifest=tomlkit.document(),
             dependencies=("demo",),
             python_version="3.11",
-            platforms=("linux-x64",),
+            platform_name="linux-x64",
             automatic=True,
             pip_command="pip",
             refresh=False,
             verbose=True,
+            uv_command="uv",
         )
     cache_parent = tmp_path / ".blex" / "wheels" / "py3.11" / "linux-x64"
     assert list(cache_parent.iterdir()) == []
