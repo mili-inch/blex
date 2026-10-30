@@ -442,6 +442,8 @@ def ensure_blex_root(project_root: Path) -> None:
     blex_root.mkdir(exist_ok=True)
     ignore_path = blex_root / ".gitignore"
     required = ("*", "!.gitignore")
+    if _is_link_or_reparse(ignore_path):
+        raise BlexError(f"managed .blex ignore path must not be a symlink: {ignore_path}")
     if ignore_path.exists():
         if _is_link_or_reparse(ignore_path) or not ignore_path.is_file():
             raise BlexError(f"managed .blex ignore path is invalid: {ignore_path}")

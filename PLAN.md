@@ -1287,6 +1287,7 @@ blexがproject内で管理する領域は次のとおりとする。
 - recursive deleteまたはreplace前に、対象の絶対pathが期待するmanaged root内にあることを再検証する。
 - unresolved環境変数、glob、project root、source-dirをrecursive delete対象にしない。
 - managed root自体がsymlinkならエラーにする。
+- `.blex/.gitignore`は存在判定より先にsymlink/reparse pointを検査し、リンク切れも拒否する。
 - dev lockとstage lockは別であり、`dev`と`stage`は同時実行できる。
 - cache lockはdev/stage間で共有する。
 - lock取得は待機しない。

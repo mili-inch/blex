@@ -320,6 +320,20 @@ def test_file_lock_rejects_contention(tmp_path: Path) -> None:
                 pytest.fail("contended lock was acquired")
 
 
+def test_managed_gitignore_rejects_dangling_link_without_external_write(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    (root / ".blex").mkdir(parents=True)
+    external = tmp_path / "outside-ignore"
+    try:
+        (root / ".blex" / ".gitignore").symlink_to(external)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+    with pytest.raises(BlexError, match="symlink"):
+        wheels.ensure_blex_root(root)
+    assert not external.exists()
+    assert (root / ".blex" / ".gitignore").is_symlink()
+
+
 def _cache_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     entry = tmp_path / "entry"
     entry.mkdir()
