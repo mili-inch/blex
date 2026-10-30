@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import stat
 import sys
 import tomllib
@@ -13,6 +14,8 @@ bpy: Any = importlib.import_module("bpy")
 
 _MANIFEST_ID: str = ""  # BLEX-CONFIG manifest-id
 _REPOSITORY_ROOT: str = ""  # BLEX-CONFIG repository-root
+_SOURCE_DIR: str = ""  # BLEX-CONFIG source-dir
+_SYNC_SOURCE_LINKS: bool = False  # BLEX-CONFIG sync-source-links
 _RELOAD_PANEL: bool = False  # BLEX-CONFIG reload-panel
 _DEBUGPY_ENABLED: bool = False  # BLEX-CONFIG debugpy-enabled
 _DEBUGPY_ROOT: str = ""  # BLEX-CONFIG debugpy-root
@@ -120,6 +123,8 @@ def _start_debugpy() -> None:
 
 
 def _reload_extension() -> None:
+    if _SYNC_SOURCE_LINKS:
+        _sync_source_links()
     _operation_finished(
         bpy.ops.preferences.addon_disable(module=_MODULE_NAME),
         "extension disable",
@@ -146,6 +151,74 @@ def _reload_extension() -> None:
         bpy.ops.preferences.addon_enable(module=_MODULE_NAME),
         "extension enable",
     )
+
+
+def _link_like(path: Path) -> bool:
+    try:
+        information = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(information.st_mode) or bool(
+        getattr(information, "st_file_attributes", 0) & 0x0400
+    )
+
+
+def _sync_source_links() -> None:
+    """Reconcile direct source links before disabling the running add-on."""
+    source = Path(_SOURCE_DIR)
+    extension = Path(_REPOSITORY_ROOT) / _MANIFEST_ID
+    if _link_like(source) or _link_like(extension):
+        raise RuntimeError("source and runtime roots must remain real directories")
+    source = source.resolve(strict=True)
+
+    def validate(directory: Path, ancestors: frozenset[Path]) -> None:
+        for child in directory.iterdir():
+            resolved = child.resolve(strict=True)
+            if not resolved.is_relative_to(source):
+                raise RuntimeError(f"source entry escapes source-dir: {child}")
+            if resolved.is_dir():
+                if resolved in ancestors:
+                    raise RuntimeError(f"source directory cycle: {child}")
+                validate(resolved, ancestors | {resolved})
+            elif not resolved.is_file():
+                raise RuntimeError(f"source entry is not a regular file: {child}")
+
+    validate(source, frozenset({source}))
+    reserved = {"blender_manifest.toml", "wheels"}
+    desired = {child.name: child for child in source.iterdir() if child.name not in reserved}
+    additions: list[tuple[Path, Path]] = []
+    removals: list[Path] = []
+    for name, original in desired.items():
+        target = extension / name
+        if _source_link(target, original):
+            continue
+        if target.exists() or _link_like(target):
+            raise RuntimeError(f"new source entry conflicts with runtime file: {target}")
+        additions.append((original, target))
+    for target in extension.iterdir():
+        if target.name in reserved or target.name in desired:
+            continue
+        if _source_link(target, source / target.name):
+            removals.append(target)
+    for original, target in additions:
+        target.symlink_to(original, target_is_directory=original.is_dir())
+    for target in removals:
+        target.unlink()
+
+
+def _source_link(path: Path, original: Path) -> bool:
+    if not path.is_symlink():
+        return False
+    target = str(path.readlink())
+    # Windows readlink returns the extended-length substitution path even when
+    # symlink_to received an ordinary drive/UNC path. Compare without following
+    # the link: its source may already have been removed or renamed.
+    if os.name == "nt":
+        if target.startswith("\\\\?\\UNC\\"):
+            target = "\\\\" + target[8:]
+        elif target.startswith("\\\\?\\"):
+            target = target[4:]
+    return Path(target) == original
 
 
 class BLEX_OT_reload_extension(bpy.types.Operator):

@@ -1127,7 +1127,7 @@ UIは次の値を使用する。
 
 operatorは次の順序で処理する。
 
-1. module名を`bl_ext.blex_dev.<manifest-id>`とする。
+1. module名を`bl_ext.blex_dev.<manifest-id>`とする。symlink配置の場合は、無効化の前にsource tree全体のpath安全性を再検証し、source直下の追加・削除・renameをruntimeのlinkへ反映する。生成Manifest、wheels、runtime生成fileは管理対象に含めず、未知のfileとの衝突はエラーにする。copy配置では同期しない。
 2. `bpy.ops.preferences.addon_disable(module=module_name)`を実行する。
 3. `importlib.invalidate_caches()`を実行する。
 4. `sys.modules`からmodule名そのものと`module_name + "."`で始まる名前を収集する。

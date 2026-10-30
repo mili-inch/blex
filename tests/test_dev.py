@@ -19,6 +19,58 @@ from blex.core.manifest import load_manifest
 from blex.core.wheels import WheelArtifact
 
 
+def test_reload_reconciles_source_links_and_rejects_unsafe_additions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, _root, source = _runtime_inputs(tmp_path)
+    try:
+        stage, mode = dev._prepare_runtime(inputs, link_mode="symlink")
+    except BlexError as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+    assert mode == "symlink"
+    repository = stage / "extensions" / "blex_dev"
+    extension = repository / "demo_extension"
+    repositories = _FakeRepositoryCollection()
+    bpy, events = _fake_bpy(repositories)
+    monkeypatch.setitem(sys.modules, "bpy", bpy)
+    script = dev._render_bootstrap(
+        manifest_id="demo_extension",
+        repository_root=repository,
+        source_dir=source,
+        sync_source_links=True,
+        reload_panel=True,
+        debugpy_root=None,
+        debugpy_host="127.0.0.1",
+        debugpy_port=5678,
+    )
+    namespace: dict[str, Any] = {}
+    exec(compile(script, "bootstrap-dev.py", "exec"), namespace)
+    (source / "new_part.py").write_text("VALUE = 42\n", encoding="utf-8")
+    (source / "new_package").mkdir()
+    (source / "new_package" / "__init__.py").write_text("", encoding="utf-8")
+    namespace["_reload_extension"]()
+    assert (extension / "new_part.py").read_text() == "VALUE = 42\n"
+    assert (extension / "new_package" / "__init__.py").is_file()
+    (extension / "runtime-owned.txt").write_text("keep", encoding="utf-8")
+    (source / "new_part.py").rename(source / "renamed.py")
+    namespace["_reload_extension"]()
+    assert not (extension / "new_part.py").is_symlink()
+    assert (extension / "renamed.py").is_symlink()
+    assert (extension / "runtime-owned.txt").read_text() == "keep"
+    outside = tmp_path / "outside.py"
+    outside.write_text("external", encoding="utf-8")
+    (source / "escape.py").symlink_to(outside)
+    before = list(events)
+    with pytest.raises(RuntimeError, match="escapes"):
+        namespace["_reload_extension"]()
+    assert events == before  # The existing add-on was not disabled.
+    (source / "escape.py").unlink()
+    (source / "runtime-owned.txt").write_text("collision", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="conflicts"):
+        namespace["_reload_extension"]()
+    assert (extension / "runtime-owned.txt").read_text() == "keep"
+
+
 def _write_project(root: Path) -> Path:
     source = root / "src" / "demo_extension"
     source.mkdir(parents=True)
@@ -308,7 +360,7 @@ def test_runtime_copy_places_artifacts_and_preserves_seed(tmp_path: Path) -> Non
     (source / "wheels").mkdir()
     (source / "wheels" / "unreferenced.whl").write_bytes(b"unused")
 
-    stage = dev._prepare_runtime(inputs, link_mode="copy")
+    stage, _mode = dev._prepare_runtime(inputs, link_mode="copy")
     extension = stage / "extensions" / "blex_dev" / "demo_extension"
     assert not (extension / "__init__.py").is_symlink()
     assert (extension / "vendor" / "manual.whl").read_bytes() == b"manual"
@@ -342,7 +394,7 @@ def test_runtime_accepts_internal_symlinked_source_wheels(tmp_path: Path) -> Non
     except OSError as exc:
         pytest.skip(f"symlink creation is unavailable: {exc}")
 
-    stage = dev._prepare_runtime(inputs, link_mode="copy")
+    stage, _mode = dev._prepare_runtime(inputs, link_mode="copy")
     extension = stage / "extensions" / "blex_dev" / "demo_extension"
     assert (extension / "wheels").is_dir()
     assert not (extension / "wheels").is_symlink()
@@ -352,7 +404,7 @@ def test_runtime_accepts_internal_symlinked_source_wheels(tmp_path: Path) -> Non
 def test_runtime_symlink_mode_links_sources_and_wheels(tmp_path: Path) -> None:
     inputs, _root, _source = _runtime_inputs(tmp_path)
     try:
-        stage = dev._prepare_runtime(inputs, link_mode="symlink")
+        stage, _mode = dev._prepare_runtime(inputs, link_mode="symlink")
     except BlexError as exc:
         pytest.skip(f"symlink creation is unavailable: {exc}")
     extension = stage / "extensions" / "blex_dev" / "demo_extension"
@@ -379,7 +431,7 @@ def test_runtime_auto_falls_back_as_one_copy_deployment(
         original(source, destination)
 
     monkeypatch.setattr(dev, "_create_symlink", fail_first)
-    stage = dev._prepare_runtime(inputs, link_mode="auto")
+    stage, _mode = dev._prepare_runtime(inputs, link_mode="auto")
     extension = stage / "extensions" / "blex_dev" / "demo_extension"
     assert not (extension / "__init__.py").is_symlink()
     assert not (extension / "wheels" / "automatic.whl").is_symlink()
@@ -580,7 +632,7 @@ def test_runtime_creation_with_long_windows_project_path(tmp_path: Path) -> None
     padded_root = tmp_path / ("p" * padding_length)
     inputs, _root, _source = _runtime_inputs(padded_root)
 
-    stage = dev._prepare_runtime(inputs, link_mode="copy")
+    stage, _mode = dev._prepare_runtime(inputs, link_mode="copy")
     atomic_candidate = stage / "extensions" / "blex_dev" / "demo_extension" / f".tmp-{'b' * 32}"
 
     assert len(str(atomic_candidate)) == 245
@@ -874,6 +926,8 @@ def test_bootstrap_adds_local_repository_enables_and_registers_reload(
         debugpy_root=None,
         debugpy_host="127.0.0.1",
         debugpy_port=5678,
+        source_dir=tmp_path / "source",
+        sync_source_links=False,
     )
     namespace: dict[str, Any] = {"__name__": "__main__"}
     exec(compile(script, "bootstrap-dev.py", "exec"), namespace)
@@ -930,6 +984,8 @@ def test_bootstrap_starts_only_the_configured_bundled_debugpy(
         debugpy_root=debugpy_root,
         debugpy_host="127.0.0.1",
         debugpy_port=5678,
+        source_dir=tmp_path / "source",
+        sync_source_links=False,
     )
     try:
         exec(compile(script, "bootstrap-dev.py", "exec"), {"__name__": "__main__"})
@@ -953,6 +1009,8 @@ def test_bootstrap_rejects_existing_repository_module(
         debugpy_root=None,
         debugpy_host="127.0.0.1",
         debugpy_port=5678,
+        source_dir=tmp_path / "source",
+        sync_source_links=False,
     )
     with pytest.raises(RuntimeError, match="repository module already exists"):
         exec(compile(script, "bootstrap-dev.py", "exec"), {"__name__": "__main__"})
@@ -975,6 +1033,8 @@ def test_bootstrap_rejects_same_id_in_another_repository(
         debugpy_root=None,
         debugpy_host="127.0.0.1",
         debugpy_port=5678,
+        source_dir=tmp_path / "source",
+        sync_source_links=False,
     )
     with pytest.raises(RuntimeError, match="already exists in repository"):
         exec(compile(script, "bootstrap-dev.py", "exec"), {"__name__": "__main__"})
@@ -997,6 +1057,8 @@ def test_bootstrap_fails_closed_on_unreadable_repository_manifest(
         debugpy_root=None,
         debugpy_host="127.0.0.1",
         debugpy_port=5678,
+        source_dir=tmp_path / "source",
+        sync_source_links=False,
     )
     with pytest.raises(RuntimeError, match="could not parse extension manifest"):
         exec(compile(script, "bootstrap-dev.py", "exec"), {"__name__": "__main__"})

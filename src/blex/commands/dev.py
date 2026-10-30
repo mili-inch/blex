@@ -443,23 +443,23 @@ def _build_runtime_stage(inputs: _RuntimeInputs, *, mode: str) -> Path:
         raise
 
 
-def _prepare_runtime(inputs: _RuntimeInputs, *, link_mode: str) -> Path:
+def _prepare_runtime(inputs: _RuntimeInputs, *, link_mode: str) -> tuple[Path, str]:
     if link_mode == "auto":
         try:
-            return _build_runtime_stage(inputs, mode="symlink")
+            return _build_runtime_stage(inputs, mode="symlink"), "symlink"
         except _SymlinkFailure as exc:
             print(
                 f"warning: symlink deployment failed; rebuilding runtime with copy: {exc}",
                 file=sys.stderr,
             )
-            return _build_runtime_stage(inputs, mode="copy")
+            return _build_runtime_stage(inputs, mode="copy"), "copy"
     if link_mode == "symlink":
         try:
-            return _build_runtime_stage(inputs, mode="symlink")
+            return _build_runtime_stage(inputs, mode="symlink"), "symlink"
         except _SymlinkFailure as exc:
             raise BlexError(str(exc)) from exc
     if link_mode == "copy":
-        return _build_runtime_stage(inputs, mode="copy")
+        return _build_runtime_stage(inputs, mode="copy"), "copy"
     raise BlexError(f"invalid dev link mode: {link_mode!r}")
 
 
@@ -632,6 +632,8 @@ def _render_bootstrap(
     *,
     manifest_id: str,
     repository_root: Path,
+    source_dir: Path,
+    sync_source_links: bool,
     reload_panel: bool,
     debugpy_root: Path | None,
     debugpy_host: str,
@@ -642,6 +644,8 @@ def _render_bootstrap(
     replacements: Mapping[str, str] = {
         "manifest-id": repr(manifest_id),
         "repository-root": repr(str(repository_root)),
+        "source-dir": repr(str(source_dir)),
+        "sync-source-links": repr(sync_source_links),
         "reload-panel": repr(reload_panel),
         "debugpy-enabled": repr(debugpy_root is not None),
         "debugpy-root": repr(str(debugpy_root) if debugpy_root is not None else ""),
@@ -672,6 +676,8 @@ def _write_bootstrap(
     *,
     manifest_id: str,
     runtime_root: Path,
+    source_dir: Path,
+    sync_source_links: bool,
     reload_panel: bool,
     debugpy_root: Path | None,
     debugpy_host: str,
@@ -687,6 +693,8 @@ def _write_bootstrap(
     rendered = _render_bootstrap(
         manifest_id=manifest_id,
         repository_root=repository_root,
+        source_dir=source_dir,
+        sync_source_links=sync_source_links,
         reload_panel=reload_panel,
         debugpy_root=debugpy_root,
         debugpy_host=debugpy_host,
@@ -803,12 +811,14 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
         artifacts=artifacts,
         seed=seed,
     )
-    runtime_stage = _prepare_runtime(runtime_inputs, link_mode=link_mode)
+    runtime_stage, deployed_mode = _prepare_runtime(runtime_inputs, link_mode=link_mode)
     _install_runtime(runtime_stage, runtime_root, blex_root=blex_root)
     bootstrap = _write_bootstrap(
         blex_root,
         manifest_id=manifest.extension_id,
         runtime_root=runtime_root,
+        source_dir=source_dir,
+        sync_source_links=deployed_mode == "symlink",
         reload_panel=reload_panel,
         debugpy_root=debugpy_root,
         debugpy_host=debugpy_host,

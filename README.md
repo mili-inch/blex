@@ -192,6 +192,10 @@ explicit `copy` mode copies from the start. Source edits are immediately visible
 through symbolic links. Copy mode takes one snapshot at startup and does not
 provide a file watcher or resynchronize while Blender is running.
 
+In symlink mode, Reload also validates and synchronizes added, removed, and
+renamed source entries. Generated manifests, wheels, and runtime-generated files
+are preserved; unsafe links or collisions stop Reload before disabling the add-on.
+
 The reload panel is enabled by default in Blender's sidebar under **Reload**.
 Its **Reload** button disables the Extension, removes its loaded Python modules,
 and enables it again. In copy mode this does not recopy the source.
