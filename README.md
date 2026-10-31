@@ -2,19 +2,18 @@
 
 `blex` is a command-line tool for creating, developing, and staging Blender
 Extensions. It keeps development state under `.blex`, resolves binary wheels for
-Blender's supported targets, and creates release staging trees without Blender.
+the running Python environment, and creates release staging trees without Blender.
 
 ## Requirements
 
 - Python 3.11 or newer
-- [`uv`](https://docs.astral.sh/uv/) for contributor setup
 - Blender 4.2 or newer when running `blex dev`
-- `uv` and `pip` executables for automatic Wheel collection (tested with uv 0.12.1)
+- `pip` installed in the same Python environment as blex for automatic Wheel collection
 
 ## Install and run
 
 ```console
-uv tool install .
+python -m pip install .
 blex --help
 blex init my-extension
 cd my-extension
@@ -23,8 +22,8 @@ blex stage
 ```
 
 Run `blex <command> --help` for all command-specific options. `blex stage`
-creates per-Python staging trees under `dist/`; packaging those trees as final
-Blender Extension archives is deliberately left to the caller.
+creates a staging tree for the running Python and platform under `dist/`; packaging it as a final
+Blender Extension archive is deliberately left to the caller.
 
 ## Project conventions
 
@@ -96,6 +95,10 @@ When both `--python` and `--blender` are given, `--python` wins and Blender is
 not started. `--blender` on `init` is only used for Python detection; it does not
 replace the generated `[tool.blex].blender` setting.
 
+`.python-version` helps select your development or CI environment. `dev` and
+`stage` use the interpreter running blex and do not read that file. Run blex in
+a Python environment matching the intended Blender Python and architecture.
+
 An existing project marker requires `--force`. Forced initialization merges
 missing configuration and template entries while preserving compatible existing
 values, comments, README, license, and Extension source files. Explicit values
@@ -111,8 +114,6 @@ to its generated manifest ID:
 [tool.blex]
 source-dir = "src/my_extension"
 blender = "blender"
-pip = "pip"
-uv = "uv"
 
 [tool.blex.dev]
 link-mode = "auto"
@@ -123,13 +124,10 @@ debugpy-host = "127.0.0.1"
 debugpy-port = 5678
 # blend-file = "scene.blend"
 # user-resources = "path/to/user-resources"
-# python = "3.11"
 
 [tool.blex.stage]
 output-dir = "dist"
 wheels = true
-# python = ["3.11"]
-# platforms = ["windows-x64", "macos-arm64", "linux-x64"]
 ```
 
 Values are selected in this order:
@@ -138,8 +136,7 @@ Values are selected in this order:
 2. the corresponding `pyproject.toml` setting
 3. the built-in default
 
-An explicit command-line list of Python versions or platforms replaces the
-configured list. `blex` does not provide environment-variable overrides for its
+`blex` does not provide environment-variable overrides for its
 own settings. Standard pip configuration and `PIP_*` environment variables are
 inherited by the pip subprocess.
 
@@ -162,9 +159,6 @@ blex dev [DIRECTORY]
     [--debugpy-host HOST]
     [--debugpy-port PORT]
     [--wheels | --no-wheels]
-    [--python X.Y]
-    [--pip EXECUTABLE]
-    [--uv EXECUTABLE]
     [--refresh-wheels]
     [-- <BLENDER_ARGS>...]
 ```
@@ -212,16 +206,15 @@ blex dev --debugpy --debugpy-host 127.0.0.1 --debugpy-port 5678
 Automatic Wheel collection is enabled by default for `dev` and `stage`. Its
 only dependency input is `[project].dependencies`; optional dependencies and
 dependency groups are not collected. Dependencies must be index-resolvable PEP
-508 requirements with binary Wheels. `uv pip compile` resolves direct and transitive
-markers for the requested Python and platform. `pip download --no-deps
---require-hashes` then fetches that exact dependency closure. Configure `--uv` or
-`[tool.blex].uv` to select the uv executable. uv configuration-file discovery is
-disabled; configure private indexes for both tools using their `UV_*` and `PIP_*`
-environment variables (pip also reads its standard configuration files). Hash
-mismatches fail rather than selecting different artifacts. No target Python
-interpreter is downloaded. Direct URLs, VCS requirements, local
-files, local directories, editable installs, requirements files, constraints
-files, and pip-specific options are not supported.
+508 requirements with binary Wheels. blex runs `sys.executable -m pip download`
+to resolve direct and transitive dependencies, markers, extras, and compatible
+Wheel tags in the current environment. It only downloads Wheels; source builds
+are disabled. pip is required only when automatic collection has dependencies.
+Configure private indexes using standard pip settings. Do not override pip's
+target environment or disable its dependency resolution through those settings.
+Direct URLs, VCS requirements, local files, local directories, editable installs,
+requirements files, constraints files, and pip-specific options in dependencies
+are not supported.
 
 `--no-wheels` disables automatic collection. Wheels explicitly listed in the
 source manifest are still validated and included. Downloaded Wheels are cached
@@ -232,12 +225,8 @@ dev/stage processes stopped. Use `--refresh-wheels` to re-resolve unchanged depe
 requirements, including after changing pip configuration or when a newer
 unfixed release should be selected.
 
-When automatic collection is enabled for `dev`, the target Python is selected
-from `--python`, then `[tool.blex.dev].python`, then `.python-version`; only the
-current host platform is targeted. For `stage`, `--python` and `--platform` may
-each be repeated. The corresponding configured arrays are used when no
-command-line list is supplied, and `.python-version` plus the current host
-platform are the final defaults.
+Both commands target the running Python, OS, and architecture. To build for
+another environment, run blex in that environment, for example in a CI matrix.
 
 Supported platform identifiers are:
 
@@ -254,46 +243,27 @@ blex stage [DIRECTORY]
     [--source-dir PATH]
     [--output-dir PATH]
     [--wheels | --no-wheels]
-    [--python X.Y]...
-    [--platform PLATFORM]...
-    [--pip EXECUTABLE]
-    [--uv EXECUTABLE]
     [--refresh-wheels]
 ```
 
-For example, the following creates staging trees for two Python versions and
-keeps separate Windows x64 and macOS ARM64 sources for each one:
-
-```console
-blex stage --python 3.11 --python 3.12 --platform windows-x64 --platform macos-arm64
-```
-
-The default output directory is `dist`, with one final source tree per Python
-version:
+Run `blex stage` in each target environment. For example, Python 3.11 on
+Windows x64 produces:
 
 ```text
 dist/
 └── py3.11/
-    ├── windows-x64/
-    │   └── source/
-    │       ├── blender_manifest.toml
-    │       ├── <Extension source entries>
-    │       └── wheels/
-    └── macos-arm64/
+    └── windows-x64/
         └── source/
             ├── blender_manifest.toml
             ├── <Extension source entries>
             └── wheels/
 ```
 
-Each source tree contains only its target's resolved dependency versions, and its
-manifest declares one platform. Linux targets accept the full manylinux tag set
-compatible with glibc 2.28, including manylinux2014. macOS targets use an 11.0
-baseline.
-
-Only selected `pyX.Y` directories are replaced, as one transaction. Their platform
-subdirectories match the requested platform list exactly. Unselected Python trees
-and other files in the output directory are left unchanged.
+Only the current `pyX.Y/<platform>` directory is replaced, as one transaction.
+Other Python and platform trees are preserved. The generated manifest declares
+one platform. Native Wheel compatibility comes from the executing environment;
+choose CI runners or containers compatible with your distribution's minimum OS
+requirements and Blender's Python and architecture.
 
 The staging copy includes all content under the source directory, including
 hidden files and `__pycache__`; manifest `paths_exclude_pattern` entries are not
@@ -310,6 +280,9 @@ python -m build
 ```
 
 ## Contributing
+
+uv is optional tooling for the locked contributor environment:
+
 
 ```console
 uv sync --locked --all-groups

@@ -10,7 +10,7 @@ CLI名とPython distribution名はともに`blex`とする。初期リリース�
 
 - `blex init`: Extensionプロジェクトを初期化する。
 - `blex dev`: 隔離したユーザー領域へExtensionを配置し、開発用Blenderを起動する。
-- `blex stage`: 対象Python・Platform向けWheelを収集し、Pythonごとのstagingを作成する。
+- `blex stage`: 実行中のPython・OS・architecture向けWheelを収集し、stagingを作成する。
 
 本仕様に明記していない後方互換、オプションの別名、設定の別名、自動探索、silent fallbackは実装しない。安全に継続できない入力や状態は明示的なエラーとして処理する。
 
@@ -24,7 +24,7 @@ CLI名とPython distribution名はともに`blex`とする。初期リリース�
 - blexはPyPIからinstallできるdistributionとして公開する。
 - blex内部の通常処理は標準ライブラリを使用する。TOMLの読み書きに限り`tomlkit`を使用する。
 - 開発依存関係はこの外部依存制限に含めない。
-- Blender、uv、pipは外部プロセスとして実行する。自動Wheel収集にはuvとpipの両方を必要とする。
+- Blenderとpipは外部プロセスとして実行する。自動Wheel収集にはblexと同じPython環境にpipを必要とし、`sys.executable -m pip`で実行する。
 - debugpyはネットワーク取得せず、blexに同梱したWheelを利用する。
 
 ### 2.2 Blender
@@ -103,7 +103,7 @@ dev = [
 
 - authorsおよびproject URLsは設定しない。
 - リポジトリルートにGPLv3全文の`LICENSE`を配置する。
-- `uv.lock`をコミットする。
+- 開発用の`uv.lock`をコミットする。uvはcontributor環境の管理にのみ使用でき、runtime・build backendの必須依存にはしない。
 - build frontendはPyPA `build`とし、`python -m build`でsdistとWheelを作成する。
 - sdistとWheelにはtemplates、同梱Wheel、licenseを含める。sdistからも同じ資源を含むWheelをbuildできる。
 - distribution versionは`importlib.metadata.version("blex")`から取得する。
@@ -126,14 +126,14 @@ src/blex/
 │   ├── project.py
 │   ├── manifest.py
 │   ├── config.py
+│   ├── environment.py
 │   ├── wheels.py
 │   ├── cache.py
 │   └── errors.py
 ├── adapters/
 │   ├── __init__.py
 │   ├── blender.py
-│   ├── pip.py
-│   └── uv.py
+│   └── pip.py
 ├── templates/
 │   ├── project/
 │   │   ├── pyproject.toml
@@ -224,7 +224,7 @@ Manifest IDは次の手順で生成する。
 
 ### 4.4 Pythonバージョン表記
 
-CLI、設定、`.python-version`で扱う対象Pythonバージョンは`<major>.<minor>`とする。
+`init --python`およびinitが生成・検証する`.python-version`のPythonバージョンは`<major>.<minor>`とする。
 
 - majorは1以上の整数とする。
 - minorは0以上の整数とする。
@@ -232,19 +232,20 @@ CLI、設定、`.python-version`で扱う対象Pythonバージョンは`<major>.
 - 前後の空白は除去する。
 - `3`、`3.11.2`、`03.11`、複数行はエラーにする。
 - blexが扱う対象Pythonバージョン自体には下限を設けない。
-- Pythonバージョンの重複指定はエラーにする。
-- stage IDは正規化した値から`py<major>.<minor>`として生成する。
+- `init --python`の反復指定はエラーにする。
+- `.python-version`は環境構築ツール・CIが使用するための情報であり、`dev`と`stage`は読み取らない。
+- `dev`と`stage`は実行中のPythonを使用し、stageのPython directory名は`sys.version_info`から`py<major>.<minor>`として生成する。
 
 ### 4.5 Pathの解決と安全性
 
 - `DIRECTORY`以外の相対CLI pathおよびTOML pathはproject root基準で解決する。
 - 設定へ生成するproject内pathは`/`区切りの相対pathとする。
-- Blender、pip、uvの値は、絶対pathであるか`/`または`\`を含む場合はpathとしてproject root基準で解決し、それ以外はcommand名として`PATH`から`shutil.which`で解決する。
+- Blenderの値は、絶対pathであるか`/`または`\`を含む場合はpathとしてproject root基準で解決し、それ以外はcommand名として`PATH`から`shutil.which`で解決する。
 - Windowsのdrive-relative形式`C:program.exe`は受理せず、絶対pathまたは明示的な相対pathを要求する。
 - macOSの`.app` bundle自体はBlender実行ファイルとして受理しない。bundle内部の実行バイナリを明示する。
 - source-dir、output-dir、blexが管理する削除・置換対象は実体pathを検証する。
 - Blex管理ディレクトリ自体がシンボリックリンクの場合は追跡せずエラーにする。
-- 読み取り元として明示されたBlendファイル、Blender実行ファイル、pip実行ファイル、user-resourcesはproject外に置ける。
+- 読み取り元として明示されたBlendファイル、Blender実行ファイル、user-resourcesはproject外に置ける。
 
 ## 5. 設定
 
@@ -258,8 +259,6 @@ CLI、設定、`.python-version`で扱う対象Pythonバージョンは`<major>.
 [tool.blex]
 source-dir = "src/my_extension"
 blender = "blender"
-pip = "pip"
-uv = "uv"
 
 [tool.blex.dev]
 link-mode = "auto"
@@ -270,13 +269,10 @@ debugpy-host = "127.0.0.1"
 debugpy-port = 5678
 # blend-file = "scene.blend"
 # user-resources = "path/to/user-resources"
-# python = "3.11"
 
 [tool.blex.stage]
 output-dir = "dist"
 wheels = true
-# python = ["3.11"]
-# platforms = ["windows-x64", "macos-arm64", "linux-x64"]
 ```
 
 `[tool.blex].blender`は共有位置に置くが、`stage`では読み取っても解決・実行しない。
@@ -287,8 +283,6 @@ wheels = true
 
 - `source-dir`: path文字列
 - `blender`: 実行ファイルpathまたはcommand名
-- `pip`: Wheel取得に使う実行ファイルpathまたはcommand名
-- `uv`: 対象環境の依存解決に使う実行ファイルpathまたはcommand名
 
 `[tool.blex.dev]`:
 
@@ -300,14 +294,11 @@ wheels = true
 - `debugpy-port`: 1以上65535以下の整数
 - `blend-file`: path文字列
 - `user-resources`: path文字列
-- `python`: Pythonバージョン文字列
 
 `[tool.blex.stage]`:
 
 - `output-dir`: path文字列
 - `wheels`: boolean
-- `python`: Pythonバージョン文字列の非空配列
-- `platforms`: 対応Platform識別子の非空配列
 
 `[tool.blex]`およびその`dev`、`stage`で未知のキーを検出した場合はエラーにする。値の型が異なる場合、空文字列の場合、配列が空の場合もエラーにする。他の`tool` tableやproject metadataの未知の値は保持する。
 
@@ -320,18 +311,16 @@ wheels = true
 3. 組み込み既定値
 
 - CLIのboolean optionは未指定、true、falseを区別する。
-- CLIで反復指定するPythonとPlatformは、設定配列へ追加せず配列全体を置き換える。
 - 環境変数でこの優先順位を上書きしない。
-- pipには`PIP_*`環境変数とpip設定ファイルを継承する。uvには`UV_*`環境変数を継承するが、`--no-config --no-sources`で設定ファイル・project探索を無効にする。private index等はuvとpipの双方に設定する。uvの解決結果のhashと一致しないWheelはpipが拒否する。
+- pipにはindex等の標準設定ファイルと`PIP_*`環境変数を継承する。対象環境や推移依存の解決を変更するpip設定は使用しない。
 
 ### 5.4 無効機能に付随する値
 
 - 設定ファイル内の`debugpy-host`と`debugpy-port`は、`debugpy = false`でも保持でき、型と範囲は検証する。
 - CLIで`--debugpy-host`または`--debugpy-port`を明示したにもかかわらず、最終的なdebugpyが無効ならエラーにする。
 - 最終的なwheelsが無効なとき、`--refresh-wheels`の明示指定はエラーにする。
-- wheels無効時もpip、uv、Pythonの設定値は保持でき、値の形式は検証する。
-- `dev --no-wheels`では対象Python、pip、uvを解決・実行しない。
-- `stage --no-wheels`でもPythonとPlatformはstage IDと生成Manifestに使用するが、pipとuvは解決・実行しない。
+- `dev --no-wheels`ではpipを実行しない。
+- `stage --no-wheels`でも実行中のPythonとPlatformを出力pathと生成Manifestに使用するが、pipは実行しない。
 
 ## 6. 共通CLI規約
 
@@ -353,10 +342,10 @@ blex [--version] [--verbose] <command>
 
 - 通常の進捗、成功情報、cache hitはstdoutへ出力する。
 - 警告とエラーはstderrへ出力する。
-- uv resolveとpip downloadのstdoutとstderrは通常時も親端末へそのまま流す。
+- pip downloadのstdoutとstderrは通常時も親端末へそのまま流す。
 - Blenderのstdoutとstderrも親端末へそのまま流す。
 - `--verbose`では解決済みpath、実行command、cache判定、生成先を追加表示する。
-- `PIP_*`、`UV_*`の値や認証情報は表示しない。
+- `PIP_*`の値や認証情報は表示しない。
 
 ### 6.3 終了コード
 
@@ -465,7 +454,6 @@ initが既存ファイルを扱う規則は次のとおりとする。
 
 - `--python`と`--blender`を同時指定した場合は`--python`を使用し、Blenderを起動せず、Blender cacheにも触れない。
 - `--python`は指定値をそのまま正規化して`.python-version`へ書く。
-- `--python`は`[tool.blex.dev].python`または`[tool.blex.stage].python`を追加・変更しない。
 - `--blender`はPython検出だけに使用し、生成または既存の`[tool.blex].blender`を追加値で上書きしない。
 - 明示指定がない既存`.python-version`は保持するが、形式不正ならエラーにする。
 - Pythonバージョンが3.11未満でも、`requires-python`を変更したり警告で代替したりしない。
@@ -581,8 +569,6 @@ dependencies = []
 [tool.blex]
 source-dir = "src/my_extension"
 blender = "blender"
-pip = "pip"
-uv = "uv"
 
 [tool.blex.dev]
 link-mode = "auto"
@@ -593,13 +579,10 @@ debugpy-host = "127.0.0.1"
 debugpy-port = 5678
 # blend-file = "scene.blend"
 # user-resources = "path/to/user-resources"
-# python = "3.11"
 
 [tool.blex.stage]
 output-dir = "dist"
 wheels = true
-# python = ["3.11"]
-# platforms = ["windows-x64", "macos-arm64", "linux-x64"]
 ```
 
 - 新規projectには`build-system`を追加しない。
@@ -781,7 +764,7 @@ Wheel処理は`dev`と`stage`で共有する。
 - 自動収集を無効にしても、元Manifestの手書き`wheels` entryと参照fileは検証・配置する。
 - 自動収集を無効にしても、最終Extension内の`wheels/` directoryは作成する。
 - 自動Wheelも手書きWheelも0件なら、生成Manifestから`wheels` fieldを省略する。
-- 自動収集が有効でも`project.dependencies`が空ならpipもuvも実行しない。
+- 自動収集が有効でも`project.dependencies`が空ならpipを実行しない。
 
 ### 9.2 dependencyの許可範囲
 
@@ -797,36 +780,19 @@ Wheel処理は`dev`と`stage`で共有する。
 - constraints file
 - pip独自option
 
-blexは依存関係resolverを実装せず、uvの公開CLIへ委ねる。markerは直接・推移的依存とも指定したCPythonバージョン・Platformに対して評価する。requirement文字列にNUL、CR、LFを含めてはならない。uvはhash付き・markerなしの固定済み依存一覧を出力し、pipはその一覧だけを`--no-deps --require-hashes`で取得する。pipによる依存の再解決は行わない。
+blexは依存関係resolverを実装せず、pipの公開CLIへ委ねる。requirement文字列にNUL、CR、LFを含めてはならない。
 
 ### 9.3 対象Python
 
-`dev`:
-
-- CLI`--python`は1回だけ指定できる。
-- 設定は`[tool.blex.dev].python`の文字列とする。
-- CLIと設定がなければ`.python-version`を使用する。
-- 自動Wheel収集が無効なら、CLIまたは設定の形式だけを検証し、`.python-version`を既定値として読み取らない。
-
-`stage`:
-
-- CLI`--python`は反復指定できる。
-- 設定は`[tool.blex.stage].python`の非空配列とする。
-- CLIと設定がなければ`.python-version`の1値を使用する。
-- `--no-wheels`でもstage ID作成のためPython解決を行う。
-
-Blender実行ファイルからのPython検出は行わない。
+`dev`と`stage`はblexを実行しているPythonだけを対象にする。
+`sys.executable`をpipの実行に使い、`sys.version_info`のmajor/minorを出力pathに使う。
+Python指定optionや設定、`.python-version`の読み取り、別Pythonの探索・取得は行わない。
+Blender実行ファイルからのPython検出も行わない。
+利用者は対象Blenderに対応するPython環境でblexを実行する。
 
 ### 9.4 対象Platform
 
-`dev`はblex processが現在動作する1 Platformだけを対象とし、Platform optionを提供しない。
-
-`stage`:
-
-- CLI`--platform`は反復指定できる。
-- 設定は`[tool.blex.stage].platforms`の非空配列とする。
-- CLIと設定がなければ現在のprocess architectureを使用する。
-
+`dev`と`stage`はblex processの現在のPlatformだけを対象にする。
 現在Platformは`platform.system()`と`platform.machine()`から次のように決定する。
 
 - Windows + AMD64/x86_64: `windows-x64`
@@ -838,51 +804,29 @@ Blender実行ファイルからのPython検出は行わない。
 
 Rosettaやemulation環境ではhardware自体ではなくblex processから観測されるarchitectureを使用する。別architectureへ自動で切り替えない。
 
-Pythonはmajor、minorの数値昇順で処理する。Platformは第2.3節の固定順で処理する。入力順には依存しない。重複は除去せずエラーにする。
-
 ### 9.5 対象環境とWheel互換タグ
 
-| Blender Platform | uv --python-platform | pip --platform |
-| --- | --- | --- |
-| windows-x64 | x86_64-pc-windows-msvc | win_amd64 |
-| windows-arm64 | aarch64-pc-windows-msvc | win_arm64 |
-| macos-x64 | x86_64-apple-darwin | macosx_11_0_x86_64 |
-| macos-arm64 | aarch64-apple-darwin | macosx_11_0_arm64 |
-| linux-x64 | x86_64-manylinux_2_28 | 下記の互換タグ全体 |
+直接・推移的依存のmarker、extras、Python/ABI/OS互換タグはpipが現在の環境で評価する。
+blex自身の互換タグ一覧やmacOS/glibcの固定baselineは設けない。
+配布先のBlenderのPython、architecture、OSの最低要件を満たす環境でstageを実行する。
+複数環境向けの生成はCI matrix等で環境ごとに独立して実行する。
 
-Linuxはglibc 2.28を基準とし、`manylinux_2_28_x86_64`から
-`manylinux_2_5_x86_64`まで降順で指定した後、`manylinux2014_x86_64`、
-`manylinux2010_x86_64`、`manylinux1_x86_64`を指定する。
-これらは同じ対象環境が受理するタグ集合であり、失敗後の代替経路ではない。
-macOSは11.0を基準とし、uv subprocessの`MACOSX_DEPLOYMENT_TARGET`も`11.0`へ固定する。
-Python X.Yに対し、implementationはcp、ABIはcpXY、abi3、noneの順で指定する。
+### 9.6 Wheel取得
 
-### 9.6 外部resolverとWheel取得
+- 自動収集が必要な場合だけ`sys.executable -m pip --version`を取得する。
+- pipが同じPython環境に存在しなければ、導入先を示すエラーにする。別の実行ファイルを探索しない。
+- shellを介さず`sys.executable -m pip download`を実行する。
+- `--only-binary=:all: --dest <temporary-directory> --disable-pip-version-check --no-input --no-cache-dir`とdependency文字列を順序どおり渡す。
+- pipが推移依存も含めて解決し、現在環境に対応するWheelを取得する。
+- 標準出力・標準エラーを継承する。認証情報をblex自身のlogへ出さない。
+- 実行不能、非zero終了、Wheel以外の取得物はエラーにする。
+- sdistのbuild、別resolverへの切替は行わない。
 
-- uvはCLI `--uv`、`[tool.blex].uv`、組み込み値`uv`の順で決定する。
-- pipはCLI `--pip`、`[tool.blex].pip`、組み込み値`pip`の順で決定する。
-- 自動収集が必要な場合だけ両方の実行ファイルを解決し、`--version`を取得する。
-- shellを介さず実行し、実行不能、非zero終了、期待する出力の欠落はエラーにする。
-- 依存一覧をUTF-8/LFの一時入力ファイルへ順序どおり書き込む。
-- `uv pip compile`へ対象Python、対象Platform、`--only-binary=:all:`、
-  `--generate-hashes --no-header --no-annotate --no-config --no-sources`を指定する。
-- uvのmarker評価には対象バージョンを用い、hostのPythonによる解決へ切り替えない。
-  `--python`へblex実行中のPythonを明示し、`--no-python-downloads`で追加Pythonの取得を禁止する。
-- uvには`--no-cache --no-progress`を指定する。一時ファイルは処理後に削除する。
-- pipには対象Python、ABI、互換Platformタグ全体、`--only-binary=:all:`、
-  `--no-deps --require-hashes --requirement <lock>`、`--dest <temporary-directory>`、
-  `--disable-pip-version-check --no-input --no-cache-dir`を指定する。
-- uvとpipの標準出力・標準エラーを継承する。認証情報をblex自身のlogへ出さない。
-- uv用・pip用のindex設定はそれぞれの環境変数等で明示する。不一致時は失敗させる。
-- sdistのbuild、host向けの再解決、別resolverへの切替は行わない。
+### 9.7 環境の分離
 
-### 9.7 Platformの分離
-
-各Python・Platformの依存解決結果は別々のsource treeへ配置する。
-異なるPlatformのWheelをunionしない。同じ名前のパッケージがPlatformごとに
-異なるversionを必要とする場合も、その依存集合をそれぞれ保持する。
+1回のstageは現在のPython・Platformのsource treeだけを作成する。
 生成Manifestのplatformsはそのtreeの1 Platformだけとする。
-1対象でも失敗した場合、選択した全Pythonのstagingを更新しない。
+他のPython・Platformの出力と依存集合を混在させず、それらの既存出力を保持する。
 
 ### 9.8 手書きWheel path
 
@@ -913,14 +857,14 @@ cache layoutは次とする。
             └── *.whl
 ```
 
-fingerprintは、解決方式format 2、順序を保持したdependency文字列、Python、Platform、解決済みpip/uv path、pip/uv version、全`PIP_*`・`UV_*`環境変数の名前と値からcanonical JSONを作り、そのSHA-256とする。
+fingerprintは、解決方式format 1、順序を保持したdependency文字列、Python、Platform、Python実行path、pip version、runtime情報、全`PIP_*`環境変数の名前と値からcanonical JSONを作り、そのSHA-256とする。runtime情報にはPEP 508の全marker値、Python build、sysconfig Platform、SOABI、libc、macOS versionを含める。
 
-- `PIP_*`・`UV_*`の値はfingerprint計算にだけ使用し、`metadata.json`やlogへ保存しない。
+- `PIP_*`の値はfingerprint計算にだけ使用し、`metadata.json`やlogへ保存しない。
 - pip設定fileの内容はfingerprintへ含めない。pip設定fileだけを変更した場合は`--refresh-wheels`を必要とする。
 - 同じfingerprintは期限なしで再利用する。
 - index上で未固定dependencyの新versionが公開されてもfingerprintは変化しないため、自動更新しない。更新には`--refresh-wheels`を使用する。
 - `--refresh-wheels`は対象fingerprintを再取得し、成功後に原子的に置き換える。
-- cache entryには取得Wheelのfilename、SHA-256、Python、Platform、pip/uv pathとversion、dependency文字列を記録する。
+- cache entryには取得Wheelのfilename、SHA-256、Python、Platform、Python実行path、pip version、runtime情報、dependency文字列を記録する。
 - metadata欠落、不正JSON、file欠落、hash不一致、予期しないfileはcache破損として明示的なエラーにする。
 - cache破損時に通常実行でrepairしない。`--refresh-wheels`だけが置換を許可する。
 - cache更新は一時directoryで完了させてからrenameする。
@@ -936,10 +880,10 @@ fingerprintは、解決方式format 2、順序を保持したdependency文字列
   "python": "3.11",
   "platform": "windows-x64",
   "pip": {
-    "executable": "C:/resolved/path/to/pip",
-    "version": "<pip --version output>"
+    "python_executable": "C:/environment/Scripts/python.exe",
+    "version": "<python -m pip --version output>"
   },
-  "uv": {"executable": "C:/resolved/path/to/uv", "version": "uv version output"},
+  "runtime": {"<runtime field>": "<value>"},
   "dependencies": ["example>=1"],
   "wheels": [
     {
@@ -976,9 +920,6 @@ blex dev [DIRECTORY]
     [--debugpy-host HOST]
     [--debugpy-port PORT]
     [--wheels | --no-wheels]
-    [--python X.Y]
-    [--pip EXECUTABLE]
-    [--uv EXECUTABLE]
     [--refresh-wheels]
     [-- <BLENDER_ARGS>...]
 ```
@@ -1193,10 +1134,6 @@ blex stage [DIRECTORY]
     [--source-dir PATH]
     [--output-dir PATH]
     [--wheels | --no-wheels]
-    [--python X.Y]...
-    [--platform PLATFORM]...
-    [--pip EXECUTABLE]
-    [--uv EXECUTABLE]
     [--refresh-wheels]
 ```
 
@@ -1223,14 +1160,14 @@ output-dirはCLI`--output-dir`、`[tool.blex.stage].output-dir`、組み込み�
 - `.blex`と同一、`.blex`の祖先、`.blex`の子孫ではない。
 - project root直下の`.git`と同一、`.git`の祖先、`.git`の子孫ではない。
 - project rootからoutput-dirまでの既存componentがsymlinkではない。
-- 選択された`pyX.Y` targetがsymlinkではない。
+- 現在の`pyX.Y/<platform>` targetがsymlinkではない。
 - output-dirまたは選択targetが存在する通常fileならエラーにする。
 
-blexが削除・置換できるのは、選択された`<output-dir>/pyX.Y`とblex自身の一時・backup directoryだけとする。output-dir内の未選択Python staging treeとその他のfileは変更しない。
+blexが削除・置換できるのは、現在環境の`<output-dir>/pyX.Y/<platform>`とblex自身の一時・backup directoryだけとする。他のPython・Platformのstaging treeとその他のfileは変更しない。
 
 ### 11.4 staging構造
 
-Pythonバージョンごとに次を作成する。
+実行中のPython・Platformの組に対して次を作成する。
 
 ```text
 <output-dir>/
@@ -1242,8 +1179,7 @@ Pythonバージョンごとに次を作成する。
             └── wheels/
 ```
 
-- stage IDはPythonバージョンだけから生成する。
-- stage IDの配下でPlatformごとにdirectoryを分ける。選択したPythonのdirectory全体を置換し、配下のPlatform一覧を今回の指定に一致させる。
+- stage IDは`pyX.Y/<platform>`とし、現在環境のPlatform directory全体を置換する。
 - source-dir全体を実fileとしてcopyする。
 - 内部symlinkは第4.2節を検証した上で実体化する。
 - 元Manifestをcopy後に生成Manifestで置き換える。
@@ -1257,21 +1193,21 @@ Pythonバージョンごとに次を作成する。
 - Blender commandとZIP作成は実行しない。
 - この`source/`が保持する最終stagingである。
 
-### 11.5 全Python transaction
+### 11.5 現在環境のtransaction
 
 stage command全体を1 transactionとして扱う。
 
-1. UUID4の小文字32桁hexを`run-id`とし、`.blex/staging/stage/<run-id>`で全Pythonのsource treeを完成させる。
-2. 全Pythonのvalidation、Wheel取得、copy、Manifest生成が成功するまでoutput-dirを変更しない。
+1. UUID4の小文字32桁hexを`run-id`とし、`.blex/staging/stage/<run-id>`の`prepared/source`で現在環境のsource treeを完成させる。
+2. 現在環境のvalidation、Wheel取得、copy、Manifest生成が成功するまでoutput-dirを変更しない。
 3. `.blex/staging/stage/<run-id>/transaction.json`へ対象、既存targetのbackup path、commit進捗を記録する。
-4. 選択targetの既存directoryをtransaction backupへrenameする。
-5. 新しいdirectoryを各targetへrenameする。
-6. 全targetのcommit成功後にbackupとcommit記録を削除する。
+4. 選択targetの既存directoryをtransaction内の`backup`へrenameする。
+5. 新しいdirectoryをtargetへrenameする。
+6. targetのcommit成功後にbackupとcommit記録を削除する。
 
 - preparation中の失敗では全一時directoryを削除し、既存outputを変更しない。
-- 捕捉可能なcommit失敗やCtrl+Cでは、完了済みrenameを逆順にrollbackし、全選択targetを元へ戻す。
+- 捕捉可能なcommit失敗やCtrl+Cでは、完了済みrenameを逆順にrollbackし、対象directoryを元へ戻す。
 - 既存targetは毎回自動的に再生成し、stageにはforce optionを設けない。
-- 通常の例外と捕捉可能な割り込みについて、全Pythonを成功または無変更とする。
+- 通常の例外と捕捉可能な割り込みについて、対象directoryを成功または無変更とする。
 - process強制終了、power loss、OS crash中のcrash consistencyは保証しない。
 - stage lock取得後、`.blex/staging/stage`に前回runのentryが1つでも残っていればabandoned transactionとみなし、自動削除、自動復旧、処理続行を行わず、関連pathを表示してエラーにする。
 
@@ -1358,9 +1294,9 @@ addopts = [
 - coverageはblex package全体のline coverage 90%以上を必須とする。
 - unit testで命名、path containment、設定優先順位、TOML merge、Manifest merge、Platform mapping、cache fingerprint、hash検証、transaction計画を検証する。
 - fake Blender executableで内部Pythonバージョン検出、timeout、起動引数、終了コード、signal supervisionを検証する。
-- fake uv/pip executableでcommand、Platform matrix、cache、失敗、stdout/stderrを検証する。
-- ローカルで生成したWheelだけを使い、実uv/pipによる直接・推移的marker、Python条件、Linux互換タグ、Platform別versionの分離、cache refresh中の参照を回帰テストする。
-- testではUV_OFFLINE、UV_PYTHON_DOWNLOADS=never、PIP_NO_INDEXを設定し、外部サービスへ接続しない。
+- fake pip moduleを別processで起動し、command、cache、失敗、stdout/stderrを検証する。
+- ローカルで生成したWheelだけを使い、実pipによる直接・推移的marker、extras、Python条件、native互換タグと依存versionの選択、cache refresh中の参照を回帰テストする。
+- 実pipのtestではPIP_NO_INDEXとローカルWheel置き場を設定し、外部サービスへ接続しない。
 - filesystem integration testでsymlink、copy、lock、rollback、output safetyを検証する。
 - debugpy同梱Wheelのfilename、SHA-256、license、package artifactへの収録をtestする。
 - test実行中にPyPI、Blender server、その他networkへ接続しない。
@@ -1387,8 +1323,8 @@ GitHub Actionsで次を実行する。
 - 本仕様の3コマンドと全optionが実装されている。
 - runtimeとcacheが`.blex`以下だけに配置される。
 - Manifest schema defaultが`1.0.0`、Manifest version defaultが`1.0.0`である。
-- transactionのstage IDはPythonバージョンとし、その配下にPlatform別source treeを生成する。選択したPython directory全体を置換し、指定しなかったPlatformをそのPython directoryに残さない。
-- `dev`と`stage`のPythonバージョンを直接指定または`.python-version`からだけ決定する。
+- stageは現在の`pyX.Y/<platform>`だけをtransactionで置換し、他環境の出力を保持する。
+- `dev`と`stage`の依存解決を実行中のPythonのpipに固定し、runtimeにuvを必要としない。
 - source Manifestを`dev`または`stage`が変更しない。
 - `stage`がBlenderを実行せず、stagingを保持する。
 - runtime dependencyが`tomlkit`以外に増えていない。

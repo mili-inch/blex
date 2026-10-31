@@ -15,9 +15,7 @@ from blex.core.project import (
     load_pyproject,
     normalize_python_version,
     normalize_python_version_file,
-    normalize_python_versions,
     project_relative_path,
-    read_python_version,
     resolve_executable,
     resolve_project_path,
     resolve_project_root,
@@ -37,7 +35,6 @@ def test_load_complete_config() -> None:
 [tool.blex]
 source-dir = "extension"
 blender = "blender-bin"
-pip = "pip-bin"
 
 [tool.blex.dev]
 link-mode = "copy"
@@ -48,19 +45,15 @@ debugpy-host = "localhost"
 debugpy-port = 1234
 blend-file = "scene.blend"
 user-resources = "seed"
-python = "3.11"
 
 [tool.blex.stage]
 output-dir = "stage"
 wheels = false
-python = ["3.14", "3.11"]
-platforms = ["windows-arm64", "linux-x64"]
 """
     )
     config = load_config(document)
     assert config.source_dir == "extension"
     assert config.blender == "blender-bin"
-    assert config.pip == "pip-bin"
     assert config.dev.link_mode == "copy"
     assert config.dev.reload_panel is False
     assert config.dev.wheels is False
@@ -69,11 +62,8 @@ platforms = ["windows-arm64", "linux-x64"]
     assert config.dev.debugpy_port == 1234
     assert config.dev.blend_file == "scene.blend"
     assert config.dev.user_resources == "seed"
-    assert config.dev.python == "3.11"
     assert config.stage.output_dir == "stage"
     assert config.stage.wheels is False
-    assert config.stage.python == ("3.14", "3.11")
-    assert config.stage.platforms == ("windows-arm64", "linux-x64")
 
 
 @pytest.mark.parametrize(
@@ -86,14 +76,25 @@ platforms = ["windows-arm64", "linux-x64"]
         "[tool.blex.dev]\nreload-panel = 1\n",
         '[tool.blex.dev]\nlink-mode = "hardlink"\n',
         "[tool.blex.dev]\ndebugpy-port = 0\n",
-        "[tool.blex.stage]\npython = []\n",
-        '[tool.blex.stage]\npython = ["3.11", "3.11"]\n',
-        '[tool.blex.stage]\nplatforms = ["linux-arm64"]\n',
-        '[tool.blex.stage]\nplatforms = ["linux-x64", "linux-x64"]\n',
     ],
 )
 def test_invalid_config_is_rejected(body: str) -> None:
     with pytest.raises((ConfigurationError, ProjectError)):
+        load_config(tomlkit.parse(body))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '[tool.blex]\npip = "pip"\n',
+        '[tool.blex]\nuv = "uv"\n',
+        '[tool.blex.dev]\npython = "3.11"\n',
+        '[tool.blex.stage]\npython = ["3.11"]\n',
+        '[tool.blex.stage]\nplatforms = ["windows-x64"]\n',
+    ],
+)
+def test_native_configuration_rejects_tool_and_target_overrides(body: str) -> None:
+    with pytest.raises(ConfigurationError, match="unknown key"):
         load_config(tomlkit.parse(body))
 
 
@@ -145,11 +146,6 @@ def test_python_version_file_allows_one_line_ending_only() -> None:
     for value in ("3.11\n\n", "\n3.11\n", "3.11\n3.12\n"):
         with pytest.raises(ProjectError, match="exactly one"):
             normalize_python_version_file(value)
-
-
-def test_duplicate_python_version() -> None:
-    with pytest.raises(ProjectError, match="duplicate"):
-        normalize_python_versions(["3.11", " 3.11 "])
 
 
 def test_description_rejects_newline_before_stripping() -> None:
@@ -284,23 +280,6 @@ def test_resolve_executable_path_and_command(
     app.mkdir()
     with pytest.raises(ProjectError, match="regular executable"):
         resolve_executable(str(app), tmp_path, "tool")
-
-
-def test_read_python_version(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError, match="does not exist"):
-        read_python_version(tmp_path)
-    version = tmp_path / ".python-version"
-    version.write_text(" 3.14 \n", encoding="utf-8")
-    assert read_python_version(tmp_path) == "3.14"
-    version.write_text("03.14\n", encoding="utf-8")
-    with pytest.raises(ProjectError, match="invalid"):
-        read_python_version(tmp_path)
-    version.write_text("3.14\n\n", encoding="utf-8")
-    with pytest.raises(ProjectError, match="exactly one"):
-        read_python_version(tmp_path)
-    version.write_bytes(b"\xff")
-    with pytest.raises(ProjectError, match="cannot read"):
-        read_python_version(tmp_path)
 
 
 def test_load_pyproject(tmp_path: Path) -> None:

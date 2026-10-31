@@ -67,26 +67,13 @@ if arguments == ["--version"]:
     raise SystemExit(0)
 if not arguments or arguments[0] != "download":
     raise RuntimeError(f"unexpected fake pip arguments: {arguments!r}")
-platform_name = arguments[arguments.index("--platform") + 1]
-print(f"fake pip stdout {platform_name}", flush=True)
-print(f"fake pip stderr {platform_name}", file=sys.stderr, flush=True)
-if platform_name == os.environ.get("BLEX_FAKE_PIP_FAIL_PLATFORM"):
+print("fake pip stdout", flush=True)
+print("fake pip stderr", file=sys.stderr, flush=True)
+if "BLEX_FAKE_PIP_EXIT" in os.environ:
     raise SystemExit(int(os.environ["BLEX_FAKE_PIP_EXIT"]))
 destination = Path(arguments[arguments.index("--dest") + 1])
 destination.mkdir(parents=True, exist_ok=True)
 (destination / "fake_dependency-1.0-py3-none-any.whl").write_bytes(b"fake wheel")
-"""
-
-_FAKE_UV = r"""
-import sys
-from pathlib import Path
-arguments = sys.argv[1:]
-if arguments == ["--version"]:
-    print("uv 99")
-else:
-    Path(arguments[arguments.index("--output-file") + 1]).write_text(
-        "fake-dependency==1 --hash=sha256:" + "0" * 64 + "\n", encoding="utf-8"
-    )
 """
 
 
@@ -168,9 +155,6 @@ def _dev_args(root: Path, blender: Path, blend_file: Path) -> argparse.Namespace
         debugpy_host=None,
         debugpy_port=None,
         wheels=None,
-        python=None,
-        pip=None,
-        uv=None,
         refresh_wheels=False,
         blender_args=["--background", "--factory-startup"],
         verbose=False,
@@ -385,139 +369,66 @@ while True:
     assert children[0].poll() == 0
 
 
-def test_real_fake_pip_exercises_platform_matrix_command_and_inherited_streams(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capfd: pytest.CaptureFixture[str],
-) -> None:
-    executable = _python_launcher(tmp_path, "fake-pip", _FAKE_PIP)
-    uv_executable = _python_launcher(tmp_path, "fake-uv", _FAKE_UV)
+def _install_fake_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    package = tmp_path / "pip"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text(_FAKE_PIP, encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     log = tmp_path / "pip.jsonl"
-    root, source = _pip_project(tmp_path, "pip-success")
     monkeypatch.setenv("BLEX_FAKE_PIP_LOG", str(log))
-    monkeypatch.delenv("BLEX_FAKE_PIP_FAIL_PLATFORM", raising=False)
-    monkeypatch.delenv("BLEX_FAKE_PIP_EXIT", raising=False)
+    return log
 
-    platforms = ("windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64")
-    artifacts = []
-    for platform_name in platforms:
-        artifacts.extend(
-            wheels.resolve_wheels(
-                project_root=root,
-                source_dir=source,
-                manifest={},
-                dependencies=("fake-dependency==1",),
-                python_version="3.11",
-                platform_name=platform_name,
-                automatic=True,
-                pip_command=str(executable),
-                uv_command=str(uv_executable),
-                refresh=False,
-            )
-        )
-    assert {artifact.relative_path.as_posix() for artifact in artifacts} == {
-        "wheels/fake_dependency-1.0-py3-none-any.whl"
-    }
-    cached_artifacts = wheels.resolve_wheels(
+
+def test_real_native_pip_process_and_cache_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    log = _install_fake_pip(tmp_path, monkeypatch)
+    root, source = _pip_project(tmp_path, "pip-success")
+    options = dict(
         project_root=root,
         source_dir=source,
         manifest={},
         dependencies=("fake-dependency==1",),
-        python_version="3.11",
-        platform_name="windows-x64",
         automatic=True,
-        pip_command=str(executable),
-        uv_command=str(uv_executable),
         refresh=False,
     )
-    assert cached_artifacts[0].sha256 == artifacts[0].sha256
-
+    artifacts = wheels.resolve_wheels(**options)
+    assert wheels.resolve_wheels(**options) == artifacts
     invocations = _read_json_lines(log)
-    assert invocations[0] == ["--version"]
-    assert invocations.count(["--version"]) == 6
-    downloads = [command for command in invocations if command and command[0] == "download"]
-    assert [command[command.index("--platform") + 1] for command in downloads] == [
-        "win_amd64",
-        "win_arm64",
-        "macosx_11_0_x86_64",
-        "macosx_11_0_arm64",
-        "manylinux_2_28_x86_64",
+    assert invocations.count(["--version"]) == 2
+    downloads = [command for command in invocations if command[0] == "download"]
+    assert len(downloads) == 1
+    assert downloads[0][:2] == ["download", "--only-binary=:all:"]
+    assert downloads[0][-4:] == [
+        "--disable-pip-version-check",
+        "--no-input",
+        "--no-cache-dir",
+        "fake-dependency==1",
     ]
-    for command in downloads:
-        assert command[0] == "download"
-        assert command[1:14] == [
-            "--only-binary=:all:",
-            "--python-version",
-            "3.11",
-            "--implementation",
-            "cp",
-            "--abi",
-            "cp311",
-            "--abi",
-            "abi3",
-            "--abi",
-            "none",
-            "--platform",
-            command[13],
-        ]
-        assert command[-7:-1] == [
-            "--disable-pip-version-check",
-            "--no-input",
-            "--no-cache-dir",
-            "--no-deps",
-            "--require-hashes",
-            "--requirement",
-        ]
+    assert "--platform" not in downloads[0]
+    assert "--no-deps" not in downloads[0]
     captured = capfd.readouterr()
-    for pip_platform in (
-        "win_amd64",
-        "win_arm64",
-        "macosx_11_0_x86_64",
-        "macosx_11_0_arm64",
-        "manylinux_2_28_x86_64",
-    ):
-        assert f"fake pip stdout {pip_platform}" in captured.out
-        assert f"fake pip stderr {pip_platform}" in captured.err
+    assert "fake pip stdout" in captured.out
+    assert "fake pip stderr" in captured.err
 
 
-def test_real_fake_pip_failure_propagates_exit_and_stops_platform_matrix(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capfd: pytest.CaptureFixture[str],
+def test_real_native_pip_failure_preserves_no_completed_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    executable = _python_launcher(tmp_path, "fake-pip", _FAKE_PIP)
-    uv_executable = _python_launcher(tmp_path, "fake-uv", _FAKE_UV)
-    log = tmp_path / "pip-failure.jsonl"
+    _install_fake_pip(tmp_path, monkeypatch)
     root, source = _pip_project(tmp_path, "pip-failure")
-    monkeypatch.setenv("BLEX_FAKE_PIP_LOG", str(log))
-    monkeypatch.setenv("BLEX_FAKE_PIP_FAIL_PLATFORM", "win_arm64")
     monkeypatch.setenv("BLEX_FAKE_PIP_EXIT", "17")
-
     with pytest.raises(BlexError, match="exit code 17"):
-        for platform_name in ("windows-x64", "windows-arm64", "linux-x64"):
-            wheels.resolve_wheels(
-                project_root=root,
-                source_dir=source,
-                manifest={},
-                dependencies=("fake-dependency==1",),
-                python_version="3.12",
-                platform_name=platform_name,
-                automatic=True,
-                pip_command=str(executable),
-                uv_command=str(uv_executable),
-                refresh=False,
-            )
-    invocations = _read_json_lines(log)
-    assert invocations[0] == ["--version"]
-    assert [
-        command[command.index("--platform") + 1]
-        for command in invocations
-        if command[0] == "download"
-    ] == [
-        "win_amd64",
-        "win_arm64",
-    ]
-    assert all("manylinux_2_28_x86_64" not in command for command in invocations)
+        wheels.resolve_wheels(
+            project_root=root,
+            source_dir=source,
+            manifest={},
+            dependencies=("fake-dependency==1",),
+            automatic=True,
+            refresh=False,
+        )
+    assert not list((root / ".blex" / "wheels").rglob("metadata.json"))
     captured = capfd.readouterr()
-    assert "fake pip stdout win_arm64" in captured.out
-    assert "fake pip stderr win_arm64" in captured.err
+    assert "fake pip stdout" in captured.out
+    assert "fake pip stderr" in captured.err

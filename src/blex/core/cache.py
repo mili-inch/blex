@@ -32,31 +32,28 @@ def wheel_fingerprint(
     dependencies: Sequence[str],
     python_version: str,
     platform_name: str,
-    pip_executable: Path,
+    python_executable: Path,
     pip_version: str,
     environment: Mapping[str, str] | None = None,
     *,
-    uv_executable: Path,
-    uv_version: str,
+    runtime: Mapping[str, str],
 ) -> str:
     """Create the canonical fingerprint for one pip target.
 
-    Every ``PIP_*`` and ``UV_*`` environment value participates in the hash.  The values
+    Every ``PIP_*`` environment value participates in the hash.  The values
     are deliberately not returned or persisted anywhere else.
     """
 
     source_environment = os.environ if environment is None else environment
     pip_environment = {
-        key: value
-        for key, value in source_environment.items()
-        if key.upper().startswith(("PIP_", "UV_"))
+        key: value for key, value in source_environment.items() if key.upper().startswith("PIP_")
     }
     payload = {
-        "format": 2,
-        "uv": {"executable": uv_executable.as_posix(), "version": uv_version},
+        "format": 1,
+        "runtime": dict(runtime),
         "dependencies": list(dependencies),
         "pip": {
-            "executable": pip_executable.as_posix(),
+            "python_executable": python_executable.as_posix(),
             "version": pip_version,
         },
         "pip_environment": pip_environment,
@@ -167,10 +164,9 @@ def validate_cache_entry(
     fingerprint: str,
     python_version: str,
     platform_name: str,
-    pip_executable: Path,
+    python_executable: Path,
     pip_version: str,
-    uv_executable: Path,
-    uv_version: str,
+    runtime: Mapping[str, str],
     dependencies: Sequence[str],
 ) -> tuple[CachedWheel, ...]:
     """Validate a cache entry and return its Wheels in filename order."""
@@ -193,14 +189,14 @@ def validate_cache_entry(
         "python",
         "platform",
         "pip",
-        "uv",
+        "runtime",
         "dependencies",
         "wheels",
     }
     if not isinstance(metadata, dict) or set(metadata) != expected_top_keys:
         raise BlexError(f"Wheel cache metadata schema is invalid: {metadata_path}")
     expected_pip = {
-        "executable": pip_executable.as_posix(),
+        "python_executable": python_executable.as_posix(),
         "version": pip_version,
     }
     if (
@@ -210,7 +206,7 @@ def validate_cache_entry(
         or metadata["python"] != python_version
         or metadata["platform"] != platform_name
         or metadata["pip"] != expected_pip
-        or metadata["uv"] != {"executable": uv_executable.as_posix(), "version": uv_version}
+        or metadata["runtime"] != dict(runtime)
         or metadata["dependencies"] != list(dependencies)
         or not isinstance(metadata["wheels"], list)
     ):
@@ -264,10 +260,9 @@ def write_cache_metadata(
     fingerprint: str,
     python_version: str,
     platform_name: str,
-    pip_executable: Path,
+    python_executable: Path,
     pip_version: str,
-    uv_executable: Path,
-    uv_version: str,
+    runtime: Mapping[str, str],
     dependencies: Sequence[str],
     wheels: Sequence[CachedWheel],
 ) -> None:
@@ -276,12 +271,12 @@ def write_cache_metadata(
     ordered_wheels = sorted(wheels, key=lambda wheel: wheel.filename)
     metadata = {
         "format": 1,
-        "uv": {"executable": uv_executable.as_posix(), "version": uv_version},
+        "runtime": dict(runtime),
         "fingerprint": fingerprint,
         "python": python_version,
         "platform": platform_name,
         "pip": {
-            "executable": pip_executable.as_posix(),
+            "python_executable": python_executable.as_posix(),
             "version": pip_version,
         },
         "dependencies": list(dependencies),

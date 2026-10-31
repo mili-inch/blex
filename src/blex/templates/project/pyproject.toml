@@ -13,8 +13,6 @@ dependencies = []
 [tool.blex]
 source-dir = "BLEX_SOURCE_DIR"
 blender = "blender"
-pip = "pip"
-uv = "uv"
 
 [tool.blex.dev]
 link-mode = "auto"
@@ -25,10 +23,7 @@ debugpy-host = "127.0.0.1"
 debugpy-port = 5678
 # blend-file = "scene.blend"
 # user-resources = "path/to/user-resources"
-# python = "3.11"
 
 [tool.blex.stage]
 output-dir = "dist"
 wheels = true
-# python = ["3.11"]
-# platforms = ["windows-x64", "macos-arm64", "linux-x64"]

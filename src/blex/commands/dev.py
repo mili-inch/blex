@@ -24,20 +24,17 @@ from blex.adapters.blender import (
     resolve_blender_executable,
     run_blender,
 )
-from blex.adapters.pip import validate_pip_executable_value
+from blex.core.environment import current_platform
 from blex.core.errors import BlexError
 from blex.core.manifest import ManifestData, load_manifest, update_manifest_for_target
 from blex.core.project import (
     derive_names,
     load_pyproject,
-    normalize_python_version,
-    read_python_version,
     resolve_project_root,
     resolve_source_dir,
     validate_source_tree,
-    validate_executable_value,
 )
-from blex.core.wheels import WheelArtifact, current_platform, resolve_wheels
+from blex.core.wheels import WheelArtifact, resolve_wheels
 
 
 _DEBUGPY_VERSION = "1.8.21"
@@ -769,29 +766,12 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
         raise BlexError("Blender executable must not be empty")
     blender = resolve_blender_executable(blender_value, project_root)
 
-    python_value = _selected(args.python, config.dev.python, None)
-    python_version: str | None
-    if automatic_wheels:
-        if python_value is None:
-            python_version = read_python_version(project_root)
-        else:
-            python_version = normalize_python_version(python_value)
-    else:
-        python_version = (
-            normalize_python_version(python_value) if python_value is not None else None
-        )
-    pip_value = validate_pip_executable_value(_selected(args.pip, config.pip, "pip"))
-    uv_value = validate_executable_value(_selected(args.uv, config.uv, "uv"), "uv")
     artifacts = resolve_wheels(
         project_root=project_root,
         source_dir=source_dir,
         manifest=manifest.document,
         dependencies=project.dependencies,
-        python_version=python_version,
-        platform_name=platform_name,
         automatic=automatic_wheels,
-        pip_command=pip_value,
-        uv_command=uv_value,
         refresh=args.refresh_wheels,
         verbose=args.verbose,
     )

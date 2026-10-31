@@ -108,20 +108,6 @@ def normalize_python_version_file(value: str) -> str:
     return normalize_python_version(line)
 
 
-def normalize_python_versions(values: Sequence[str]) -> tuple[str, ...]:
-    """Validate multiple Python versions and reject duplicates."""
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        current = normalize_python_version(value)
-        if current in seen:
-            raise ProjectError(f"duplicate Python version: {current}")
-        seen.add(current)
-        normalized.append(current)
-    return tuple(normalized)
-
-
 def validate_description(value: str) -> str:
     """Validate the one-line project description used by ``init``."""
 
@@ -295,19 +281,6 @@ def resolve_executable(value: str, root: Path, label: str) -> Path:
     if os.name != "nt" and not os.access(resolved, os.X_OK):
         raise ProjectError(f"{label} file is not executable: {resolved}")
     return resolved
-
-
-def read_python_version(root: Path) -> str:
-    """Read and validate ``.python-version`` at the project root."""
-
-    path = root / ".python-version"
-    if not path.is_file():
-        raise ProjectError(f"Python version file does not exist: {path}")
-    try:
-        value = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ProjectError(f"cannot read Python version file {path}: {exc}") from exc
-    return normalize_python_version_file(value)
 
 
 def _unwrap(value: object) -> object:

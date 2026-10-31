@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
@@ -31,7 +31,6 @@ class DevConfig:
     debugpy_port: int | None = None
     blend_file: str | None = None
     user_resources: str | None = None
-    python: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,8 +39,6 @@ class StageConfig:
 
     output_dir: str | None = None
     wheels: bool | None = None
-    python: tuple[str, ...] | None = None
-    platforms: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,8 +47,6 @@ class BlexConfig:
 
     source_dir: str | None = None
     blender: str | None = None
-    pip: str | None = None
-    uv: str | None = None
     dev: DevConfig = DevConfig()
     stage: StageConfig = StageConfig()
 
@@ -97,23 +92,6 @@ def _unknown_keys(table: Mapping[str, object], allowed: set[str], location: str)
         raise ConfigurationError(f"unknown key in {location}: {joined}")
 
 
-def _optional_string_array(
-    table: Mapping[str, object], key: str, location: str
-) -> tuple[str, ...] | None:
-    if key not in table:
-        return None
-    value = _unwrap(table[key])
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or not value:
-        raise ConfigurationError(f"{location}.{key} must be a non-empty array of strings")
-    result: list[str] = []
-    for entry in value:
-        unwrapped = _unwrap(entry)
-        if not isinstance(unwrapped, str) or not unwrapped.strip():
-            raise ConfigurationError(f"{location}.{key} must contain only non-empty strings")
-        result.append(unwrapped)
-    return tuple(result)
-
-
 def _load_dev(table: Mapping[str, object]) -> DevConfig:
     location = "[tool.blex.dev]"
     _unknown_keys(
@@ -127,7 +105,6 @@ def _load_dev(table: Mapping[str, object]) -> DevConfig:
             "debugpy-port",
             "blend-file",
             "user-resources",
-            "python",
         },
         location,
     )
@@ -143,13 +120,6 @@ def _load_dev(table: Mapping[str, object]) -> DevConfig:
             raise ConfigurationError(f"{location}.debugpy-port must be an integer from 1 to 65535")
         debugpy_port = cast(int, value)
 
-    python = _optional_string(table, "python", location)
-    if python is not None:
-        # Local import avoids a module-import cycle with project.load_pyproject().
-        from .project import normalize_python_version
-
-        python = normalize_python_version(python)
-
     return DevConfig(
         link_mode=link_mode,
         reload_panel=_optional_bool(table, "reload-panel", location),
@@ -159,37 +129,16 @@ def _load_dev(table: Mapping[str, object]) -> DevConfig:
         debugpy_port=debugpy_port,
         blend_file=_optional_string(table, "blend-file", location),
         user_resources=_optional_string(table, "user-resources", location),
-        python=python,
     )
 
 
 def _load_stage(table: Mapping[str, object]) -> StageConfig:
     location = "[tool.blex.stage]"
-    _unknown_keys(table, {"output-dir", "wheels", "python", "platforms"}, location)
-
-    python_values = _optional_string_array(table, "python", location)
-    if python_values is not None:
-        from .project import normalize_python_versions
-
-        python_values = normalize_python_versions(python_values)
-
-    platforms = _optional_string_array(table, "platforms", location)
-    if platforms is not None:
-        seen: set[str] = set()
-        for platform in platforms:
-            if platform not in SUPPORTED_PLATFORMS:
-                raise ConfigurationError(
-                    f"unsupported platform in {location}.platforms: {platform}"
-                )
-            if platform in seen:
-                raise ConfigurationError(f"duplicate platform in {location}.platforms: {platform}")
-            seen.add(platform)
+    _unknown_keys(table, {"output-dir", "wheels"}, location)
 
     return StageConfig(
         output_dir=_optional_string(table, "output-dir", location),
         wheels=_optional_bool(table, "wheels", location),
-        python=python_values,
-        platforms=platforms,
     )
 
 
@@ -210,7 +159,7 @@ def load_config(document: Mapping[str, object]) -> BlexConfig:
     if blex_value is None:
         return BlexConfig()
     blex = _as_mapping(blex_value, "[tool.blex]")
-    _unknown_keys(blex, {"source-dir", "blender", "pip", "uv", "dev", "stage"}, "[tool.blex]")
+    _unknown_keys(blex, {"source-dir", "blender", "dev", "stage"}, "[tool.blex]")
 
     dev_value = blex.get("dev")
     stage_value = blex.get("stage")
@@ -224,8 +173,6 @@ def load_config(document: Mapping[str, object]) -> BlexConfig:
     return BlexConfig(
         source_dir=_optional_string(blex, "source-dir", "[tool.blex]"),
         blender=_optional_string(blex, "blender", "[tool.blex]"),
-        pip=_optional_string(blex, "pip", "[tool.blex]"),
-        uv=_optional_string(blex, "uv", "[tool.blex]"),
         dev=dev,
         stage=stage,
     )

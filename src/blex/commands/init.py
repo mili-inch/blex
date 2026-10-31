@@ -272,8 +272,6 @@ def _merge_pyproject(
     for key, value in (
         ("source-dir", source_relative),
         ("blender", "blender"),
-        ("pip", "pip"),
-        ("uv", "uv"),
     ):
         if key not in blex:
             blex[key] = value

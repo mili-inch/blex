@@ -5,15 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-import platform as host_platform
+import sys
 import re
 import shutil
 from typing import Any
 import uuid
 
-from blex.adapters.pip import download_wheels, get_pip_version, resolve_pip_executable
-from blex.adapters.uv import get_uv_version
-from blex.core.project import resolve_executable
+from blex.adapters.pip import download_wheels, get_pip_version
+from blex.core.environment import current_platform, current_python_version, resolution_environment
 from blex.core.cache import (
     CachedWheel,
     FileLock,
@@ -27,24 +26,6 @@ from blex.core.cache import (
 from blex.core.errors import BlexError
 
 
-SUPPORTED_PLATFORMS = (
-    "windows-x64",
-    "windows-arm64",
-    "macos-x64",
-    "macos-arm64",
-    "linux-x64",
-)
-
-PIP_PLATFORMS = {
-    "windows-x64": ("win_amd64",),
-    "windows-arm64": ("win_arm64",),
-    "macos-x64": ("macosx_11_0_x86_64",),
-    "macos-arm64": ("macosx_11_0_arm64",),
-    "linux-x64": tuple(f"manylinux_2_{minor}_x86_64" for minor in range(28, 4, -1))
-    + ("manylinux2014_x86_64", "manylinux2010_x86_64", "manylinux1_x86_64"),
-}
-
-_PYTHON_VERSION = re.compile(r"([1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 _ARCHIVE_SUFFIXES = (".whl", ".zip", ".tar", ".tar.gz", ".tar.bz2", ".tgz")
 
@@ -60,66 +41,6 @@ class WheelArtifact:
     @property
     def manifest_entry(self) -> str:
         return f"./{self.relative_path.as_posix()}"
-
-
-def normalize_python_version(value: str) -> str:
-    """Validate and normalize the target ``major.minor`` representation."""
-
-    if not isinstance(value, str) or "\n" in value or "\r" in value:
-        raise BlexError("Python target must be a single major.minor string")
-    normalized = value.strip()
-    if _PYTHON_VERSION.fullmatch(normalized) is None:
-        raise BlexError(f"invalid Python target: {value!r}; expected major.minor")
-    return normalized
-
-
-def normalize_python_versions(values: Sequence[str]) -> tuple[str, ...]:
-    """Validate, reject duplicates, and numerically sort Python targets."""
-
-    normalized = [normalize_python_version(value) for value in values]
-    if len(set(normalized)) != len(normalized):
-        raise BlexError("Python targets must not contain duplicates")
-    return tuple(
-        sorted(normalized, key=lambda value: tuple(int(part) for part in value.split(".")))
-    )
-
-
-def stage_id(python_version: str) -> str:
-    return f"py{normalize_python_version(python_version)}"
-
-
-def normalize_platforms(values: Sequence[str]) -> tuple[str, ...]:
-    """Validate, reject duplicates, and return the fixed Platform order."""
-
-    platforms = list(values)
-    invalid = [value for value in platforms if value not in PIP_PLATFORMS]
-    if invalid:
-        raise BlexError(f"unsupported Wheel Platform: {invalid[0]}")
-    if len(set(platforms)) != len(platforms):
-        raise BlexError("Wheel Platforms must not contain duplicates")
-    return tuple(name for name in SUPPORTED_PLATFORMS if name in platforms)
-
-
-def current_platform(
-    system: str | None = None,
-    machine: str | None = None,
-) -> str:
-    """Map the current process OS and architecture to a Blender Platform."""
-
-    system_name = host_platform.system() if system is None else system
-    machine_name = host_platform.machine() if machine is None else machine
-    normalized_machine = machine_name.lower()
-    if system_name == "Windows" and normalized_machine in {"amd64", "x86_64"}:
-        return "windows-x64"
-    if system_name == "Windows" and normalized_machine in {"arm64", "aarch64"}:
-        return "windows-arm64"
-    if system_name == "Darwin" and normalized_machine == "x86_64":
-        return "macos-x64"
-    if system_name == "Darwin" and normalized_machine in {"arm64", "aarch64"}:
-        return "macos-arm64"
-    if system_name == "Linux" and normalized_machine in {"x86_64", "amd64"}:
-        return "linux-x64"
-    raise BlexError(f"unsupported host Platform for Wheel targeting: {system_name} {machine_name}")
 
 
 def validate_dependencies(dependencies: Sequence[str]) -> None:
@@ -157,20 +78,11 @@ def resolve_wheels(
     source_dir: Path,
     manifest: Mapping[str, Any],
     dependencies: Sequence[str],
-    python_version: str | None,
-    platform_name: str,
     automatic: bool,
-    pip_command: str,
-    uv_command: str,
     refresh: bool,
     verbose: bool = False,
 ) -> tuple[WheelArtifact, ...]:
-    """Resolve manual and optionally automatic Wheels for one Python target.
-
-    ``python_version`` may be ``None`` only when automatic collection is
-    disabled.  This permits ``dev --no-wheels`` to avoid reading the project's
-    ``.python-version`` altogether.
-    """
+    """Resolve manual and native automatic Wheels for the running interpreter."""
 
     manual = _manual_wheels(source_dir, manifest)
     if not automatic:
@@ -178,27 +90,23 @@ def resolve_wheels(
             raise BlexError("--refresh-wheels cannot be used when automatic Wheels are disabled")
         return _merge_artifacts(manual)
 
-    if python_version is None:
-        raise BlexError("a Python target is required when automatic Wheels are enabled")
-    normalized_python = normalize_python_version(python_version)
-    normalize_platforms((platform_name,))
     validate_dependencies(dependencies)
     if not dependencies:
         return _merge_artifacts(manual)
 
-    pip_executable = resolve_pip_executable(pip_command, project_root)
-    pip_version = get_pip_version(pip_executable, verbose=verbose)
-    uv_executable = resolve_executable(uv_command, project_root, "uv")
-    uv_version = get_uv_version(uv_executable, verbose=verbose)
+    python_executable = Path(sys.executable)
+    pip_version = get_pip_version(python_executable, verbose=verbose)
+    python_version = current_python_version()
+    platform_name = current_platform()
+    runtime = resolution_environment()
     cached = _resolve_cached_target(
         project_root=project_root,
         dependencies=dependencies,
-        python_version=normalized_python,
+        python_version=python_version,
         platform_name=platform_name,
-        pip_executable=pip_executable,
+        python_executable=python_executable,
         pip_version=pip_version,
-        uv_executable=uv_executable,
-        uv_version=uv_version,
+        runtime=runtime,
         refresh=refresh,
         verbose=verbose,
     )
@@ -272,10 +180,9 @@ def _resolve_cached_target(
     dependencies: Sequence[str],
     python_version: str,
     platform_name: str,
-    pip_executable: Path,
+    python_executable: Path,
     pip_version: str,
-    uv_executable: Path,
-    uv_version: str,
+    runtime: Mapping[str, str],
     refresh: bool,
     verbose: bool,
 ) -> tuple[CachedWheel, ...]:
@@ -283,10 +190,9 @@ def _resolve_cached_target(
         dependencies,
         python_version,
         platform_name,
-        pip_executable,
+        python_executable,
         pip_version,
-        uv_executable=uv_executable,
-        uv_version=uv_version,
+        runtime=runtime,
     )
     entry = cache_entry_path(project_root, python_version, platform_name, fingerprint)
     lock_path = cache_lock_path(project_root, python_version, platform_name, fingerprint)
@@ -307,10 +213,9 @@ def _resolve_cached_target(
                     fingerprint=fingerprint,
                     python_version=python_version,
                     platform_name=platform_name,
-                    pip_executable=pip_executable,
+                    python_executable=python_executable,
                     pip_version=pip_version,
-                    uv_executable=uv_executable,
-                    uv_version=uv_version,
+                    runtime=runtime,
                     dependencies=dependencies,
                 )
                 print(f"Wheel cache hit: {entry}")
@@ -324,15 +229,9 @@ def _resolve_cached_target(
         commit_started = False
         try:
             temporary.mkdir()
-            abi = "cp" + python_version.replace(".", "")
             downloaded = download_wheels(
-                pip_executable,
+                python_executable,
                 dependencies=dependencies,
-                python_version=python_version,
-                abi=abi,
-                pip_platforms=PIP_PLATFORMS[platform_name],
-                uv_executable=uv_executable,
-                platform_name=platform_name,
                 destination=temporary,
                 verbose=verbose,
             )
@@ -341,10 +240,9 @@ def _resolve_cached_target(
                 fingerprint=fingerprint,
                 python_version=python_version,
                 platform_name=platform_name,
-                pip_executable=pip_executable,
+                python_executable=python_executable,
                 pip_version=pip_version,
-                uv_executable=uv_executable,
-                uv_version=uv_version,
+                runtime=runtime,
                 dependencies=dependencies,
                 wheels=downloaded,
             )
@@ -353,10 +251,9 @@ def _resolve_cached_target(
                 fingerprint=fingerprint,
                 python_version=python_version,
                 platform_name=platform_name,
-                pip_executable=pip_executable,
+                python_executable=python_executable,
                 pip_version=pip_version,
-                uv_executable=uv_executable,
-                uv_version=uv_version,
+                runtime=runtime,
                 dependencies=dependencies,
             )
             commit_started = True
@@ -393,10 +290,9 @@ def _resolve_cached_target(
             fingerprint=fingerprint,
             python_version=python_version,
             platform_name=platform_name,
-            pip_executable=pip_executable,
+            python_executable=python_executable,
             pip_version=pip_version,
-            uv_executable=uv_executable,
-            uv_version=uv_version,
+            runtime=runtime,
             dependencies=dependencies,
         )
         return _freeze_wheels(project_root, installed)

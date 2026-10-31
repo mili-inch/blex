@@ -37,7 +37,7 @@ def test_top_level_and_command_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main_module.main(["--help"]) == 0
     assert "{init,dev,stage}" in capsys.readouterr().out
     assert main_module.main(["stage", "--help"]) == 0
-    assert "--platform" in capsys.readouterr().out
+    assert "--output-dir" in capsys.readouterr().out
 
 
 def test_short_help_option_is_not_provided(capsys: pytest.CaptureFixture[str]) -> None:
@@ -81,30 +81,12 @@ def test_dev_blender_arguments_require_and_strip_delimiter() -> None:
     assert wrong_command.value.code == 2
 
 
-@pytest.mark.parametrize("command", ["init", "dev"])
+@pytest.mark.parametrize("command", ["init"])
 def test_single_target_python_may_only_be_specified_once(command: str) -> None:
     assert parse_args([command, "--python", "3.11"]).python == "3.11"
     with pytest.raises(SystemExit) as error:
         parse_args([command, "--python", "3.11", "--python", "3.12"])
     assert error.value.code == 2
-
-
-def test_stage_repeated_targets_preserve_cli_order() -> None:
-    args = create_parser().parse_args(
-        [
-            "stage",
-            "--python",
-            "3.11",
-            "--python",
-            "3.14",
-            "--platform",
-            "linux-x64",
-            "--platform",
-            "windows-arm64",
-        ]
-    )
-    assert args.python == ["3.11", "3.14"]
-    assert args.platform == ["linux-x64", "windows-arm64"]
 
 
 def test_init_and_dev_options_have_exact_destinations() -> None:
@@ -148,10 +130,6 @@ def test_init_and_dev_options_have_exact_destinations() -> None:
             "localhost",
             "--debugpy-port",
             "5678",
-            "--python",
-            "3.14",
-            "--pip",
-            "pip-bin",
             "--refresh-wheels",
         ]
     )
@@ -226,3 +204,11 @@ def test_python_module_entry_raises_system_exit(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(SystemExit) as error:
         runpy.run_module("blex.__main__", run_name="__main__")
     assert error.value.code == 7
+
+
+@pytest.mark.parametrize("command", ["dev", "stage"])
+@pytest.mark.parametrize("option", ["--python", "--platform", "--pip", "--uv"])
+def test_native_commands_reject_target_and_tool_overrides(command: str, option: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        parse_args([command, option, "value"])
+    assert error.value.code == 2

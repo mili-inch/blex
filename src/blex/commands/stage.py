@@ -13,9 +13,9 @@ import uuid
 
 import tomlkit
 
-from blex.adapters.pip import validate_pip_executable_value
 from blex.core.cache import FileLock, sha256_file
 from blex.core.config import select_value
+from blex.core.environment import current_platform, current_python_version
 from blex.core.errors import BlexError
 from blex.core.manifest import load_manifest, update_manifest_for_target
 from blex.core.project import (
@@ -23,23 +23,17 @@ from blex.core.project import (
     is_strict_descendant,
     is_symlink_or_reparse,
     load_pyproject,
-    read_python_version,
     resolve_project_path,
     resolve_project_root,
     resolve_source_dir,
     validate_source_tree,
-    validate_executable_value,
 )
 from blex.core.wheels import (
     WheelArtifact,
-    current_platform,
     ensure_blex_root,
     ensure_managed_directory,
-    normalize_platforms,
-    normalize_python_versions,
     remove_managed_tree,
     resolve_wheels,
-    stage_id,
 )
 
 
@@ -55,7 +49,7 @@ class _TargetState:
 
 
 def run(args: argparse.Namespace) -> int:
-    """Create all selected Python staging trees as one transaction."""
+    """Create the native staging tree as one transaction."""
 
     root = resolve_project_root(args.directory, must_exist=True)
     try:
@@ -95,76 +89,55 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
     if not automatic and args.refresh_wheels:
         raise BlexError("--refresh-wheels cannot be used with --no-wheels")
 
-    python_values = args.python if args.python is not None else project.config.stage.python
-    if python_values is None:
-        python_values = (read_python_version(root),)
-    python_versions = normalize_python_versions(python_values)
-
-    platform_values = args.platform if args.platform is not None else project.config.stage.platforms
-    if platform_values is None:
-        platform_values = (current_platform(),)
-    platforms = normalize_platforms(platform_values)
-
+    python_version = current_python_version()
+    platform_name = current_platform()
     output_value = select_value(args.output_dir, project.config.stage.output_dir, "dist")
-    output_dir = _resolve_output_dir(root, source_dir, output_value, python_versions)
-    pip_command = validate_pip_executable_value(select_value(args.pip, project.config.pip, "pip"))
-    uv_command = validate_executable_value(select_value(args.uv, project.config.uv, "uv"), "uv")
-    verbose = bool(getattr(args, "verbose", False))
+    output_dir = _resolve_output_dir(root, source_dir, output_value)
+    target = output_dir / f"py{python_version}" / platform_name
+    _validate_existing_components(target)
+    if target.exists() and not target.is_dir():
+        raise BlexError(f"selected stage target is not a directory: {target}")
+    verbose = args.verbose
     if verbose:
         print(f"project root: {root}")
         print(f"source-dir: {source_dir}")
         print(f"output-dir: {output_dir}")
-        print(f"Python targets: {', '.join(python_versions)}")
-        print(f"Platforms: {', '.join(platforms)}")
+        print(f"Python: {python_version}")
+        print(f"Platform: {platform_name}")
 
     run_root = staging_parent / uuid.uuid4().hex
-    states: list[_TargetState] = []
+    state = _TargetState(
+        python=python_version,
+        identifier=f"py{python_version}/{platform_name}",
+        target=target,
+        prepared=run_root / "prepared",
+        backup=run_root / "backup",
+    )
     created_output_directories: list[Path] = []
-    committed = False
     try:
         run_root.mkdir()
-        for python_version in python_versions:
-            identifier = stage_id(python_version)
-            prepared = run_root / "prepared" / identifier
-            backup = run_root / "backups" / identifier
-            target = output_dir / identifier
-            for platform_name in platforms:
-                artifacts = resolve_wheels(
-                    project_root=root,
-                    source_dir=source_dir,
-                    manifest=manifest.document,
-                    dependencies=project.dependencies,
-                    python_version=python_version,
-                    platform_name=platform_name,
-                    automatic=automatic,
-                    pip_command=pip_command,
-                    uv_command=uv_command,
-                    refresh=args.refresh_wheels,
-                    verbose=verbose,
-                )
-                _prepare_target(
-                    source_dir=source_dir,
-                    prepared=prepared / platform_name,
-                    manifest_document=manifest.document,
-                    platforms=(platform_name,),
-                    artifacts=artifacts,
-                )
-            states.append(
-                _TargetState(
-                    python=python_version,
-                    identifier=identifier,
-                    target=target,
-                    prepared=prepared,
-                    backup=backup,
-                )
-            )
-        _write_transaction(run_root, states)
-        _commit(root, output_dir, run_root, states, created_output_directories)
-        committed = True
+        artifacts = resolve_wheels(
+            project_root=root,
+            source_dir=source_dir,
+            manifest=manifest.document,
+            dependencies=project.dependencies,
+            automatic=automatic,
+            refresh=args.refresh_wheels,
+            verbose=verbose,
+        )
+        _prepare_target(
+            source_dir=source_dir,
+            prepared=state.prepared,
+            manifest_document=manifest.document,
+            platforms=(platform_name,),
+            artifacts=artifacts,
+        )
+        _write_transaction(run_root, state)
+        _commit(root, run_root, state, created_output_directories)
     except BaseException:
-        if states and any(state.state != "prepared" for state in states):
+        if state.state != "prepared":
             try:
-                _rollback(root, run_root, states)
+                _rollback(root, run_root, state)
             except BaseException as rollback_error:
                 raise BlexError(
                     f"stage commit failed and rollback was incomplete; "
@@ -175,15 +148,8 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
             remove_managed_tree(root, run_root)
         raise
 
-    if committed:
-        for state in states:
-            if state.backup.exists():
-                remove_managed_tree(root, state.backup)
-        if run_root.exists():
-            remove_managed_tree(root, run_root)
-        _remove_empty_directories(created_output_directories)
-        for state in states:
-            print(f"Built {state.identifier}: {state.target}")
+    remove_managed_tree(root, run_root)
+    print(f"Built {state.identifier}: {state.target}")
 
 
 def _prepare_target(
@@ -241,7 +207,6 @@ def _resolve_output_dir(
     root: Path,
     source_dir: Path,
     value: str,
-    python_versions: tuple[str, ...],
 ) -> Path:
     if not value or "\x00" in value:
         raise BlexError("output-dir must be a non-empty path without NUL")
@@ -264,12 +229,6 @@ def _resolve_output_dir(
         ):
             raise BlexError(f"output-dir overlaps protected path {protected_resolved}: {output}")
 
-    for python_version in python_versions:
-        target = output / stage_id(python_version)
-        if is_symlink_or_reparse(target):
-            raise BlexError(f"selected stage target must not be a symlink: {target}")
-        if target.exists() and not target.is_dir():
-            raise BlexError(f"selected stage target is not a directory: {target}")
     return output
 
 
@@ -293,29 +252,24 @@ def _validate_existing_components(path: Path) -> None:
             raise BlexError(f"output-dir parent component is not a directory: {current}")
 
 
-def _transaction_payload(run_root: Path, states: list[_TargetState]) -> dict[str, object]:
+def _transaction_payload(run_root: Path, state: _TargetState) -> dict[str, object]:
     return {
         "format": 1,
         "run_id": run_root.name,
-        "targets": [
-            {
-                "python": state.python,
-                "target": state.target.as_posix(),
-                "prepared": state.prepared.as_posix(),
-                "backup": state.backup.as_posix(),
-                "had_target": state.had_target,
-                "state": state.state,
-            }
-            for state in states
-        ],
+        "python": state.python,
+        "target": state.target.as_posix(),
+        "prepared": state.prepared.as_posix(),
+        "backup": state.backup.as_posix(),
+        "had_target": state.had_target,
+        "state": state.state,
     }
 
 
-def _write_transaction(run_root: Path, states: list[_TargetState]) -> None:
+def _write_transaction(run_root: Path, state: _TargetState) -> None:
     path = run_root / "transaction.json"
     temporary = run_root / f".transaction-{uuid.uuid4().hex}.tmp"
     temporary.write_text(
-        json.dumps(_transaction_payload(run_root, states), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(_transaction_payload(run_root, state), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -324,91 +278,77 @@ def _write_transaction(run_root: Path, states: list[_TargetState]) -> None:
 
 def _commit(
     root: Path,
-    output_dir: Path,
     run_root: Path,
-    states: list[_TargetState],
+    state: _TargetState,
     created_output_directories: list[Path],
 ) -> None:
-    _create_output_directory(output_dir, root, created_output_directories)
-    for state in states:
-        if is_symlink_or_reparse(state.target):
-            raise BlexError(f"selected stage target became a symlink: {state.target}")
-        state.had_target = state.target.exists()
-        state.state = "backup_pending" if state.had_target else "install_pending"
-        _write_transaction(run_root, states)
-        if state.had_target:
+    _create_output_directory(state.target.parent, root, created_output_directories)
+    if is_symlink_or_reparse(state.target):
+        raise BlexError(f"selected stage target became a symlink: {state.target}")
+    state.had_target = state.target.exists()
+    state.state = "backup_pending" if state.had_target else "install_pending"
+    _write_transaction(run_root, state)
+    if state.had_target:
+        if not state.target.is_dir():
+            raise BlexError(f"selected stage target is not a directory: {state.target}")
+        state.target.rename(state.backup)
+        state.state = "install_pending"
+        _write_transaction(run_root, state)
+    state.prepared.rename(state.target)
+    state.state = "installed"
+    _write_transaction(run_root, state)
+
+
+def _rollback(root: Path, run_root: Path, state: _TargetState) -> None:
+    if state.state == "prepared":
+        state.state = "rolled_back"
+        _write_transaction(run_root, state)
+        return
+    target_exists = state.target.exists() or is_symlink_or_reparse(state.target)
+    prepared_exists = state.prepared.exists() or is_symlink_or_reparse(state.prepared)
+    backup_exists = state.backup.exists() or is_symlink_or_reparse(state.backup)
+
+    if state.had_target:
+        if backup_exists:
+            if is_symlink_or_reparse(state.backup) or not state.backup.is_dir():
+                raise BlexError(f"stage backup cannot be restored safely: {state.backup}")
+            if target_exists:
+                if prepared_exists:
+                    raise BlexError(
+                        f"rollback found both target and prepared paths: {state.target}"
+                    )
+                if is_symlink_or_reparse(state.target) or not state.target.is_dir():
+                    raise BlexError(
+                        f"installed target cannot be rolled back safely: {state.target}"
+                    )
+                state.prepared.parent.mkdir(parents=True, exist_ok=True)
+                state.target.rename(state.prepared)
+            state.backup.rename(state.target)
+        else:
+            if not target_exists or is_symlink_or_reparse(state.target):
+                raise BlexError(f"original stage target is missing: {state.target}")
             if not state.target.is_dir():
-                raise BlexError(f"selected stage target is not a directory: {state.target}")
-            state.backup.parent.mkdir(parents=True, exist_ok=True)
-            state.target.rename(state.backup)
-            state.state = "backed_up"
-            _write_transaction(run_root, states)
-            state.state = "install_pending"
-            _write_transaction(run_root, states)
-        state.prepared.rename(state.target)
-        state.state = "installed"
-        _write_transaction(run_root, states)
-
-
-def _rollback(root: Path, run_root: Path, states: list[_TargetState]) -> None:
-    failures: list[str] = []
-    for state in reversed(states):
-        try:
-            if state.state == "prepared":
-                state.state = "rolled_back"
-                _write_transaction(run_root, states)
-                continue
-            target_exists = state.target.exists() or is_symlink_or_reparse(state.target)
-            prepared_exists = state.prepared.exists() or is_symlink_or_reparse(state.prepared)
-            backup_exists = state.backup.exists() or is_symlink_or_reparse(state.backup)
-
-            if state.had_target:
-                if backup_exists:
-                    if is_symlink_or_reparse(state.backup) or not state.backup.is_dir():
-                        raise BlexError(f"stage backup cannot be restored safely: {state.backup}")
-                    if target_exists:
-                        if prepared_exists:
-                            raise BlexError(
-                                f"rollback found both target and prepared paths: {state.target}"
-                            )
-                        if is_symlink_or_reparse(state.target) or not state.target.is_dir():
-                            raise BlexError(
-                                f"installed target cannot be rolled back safely: {state.target}"
-                            )
-                        state.prepared.parent.mkdir(parents=True, exist_ok=True)
-                        state.target.rename(state.prepared)
-                    state.backup.rename(state.target)
-                else:
-                    if not target_exists or is_symlink_or_reparse(state.target):
-                        raise BlexError(f"original stage target is missing: {state.target}")
-                    if not state.target.is_dir():
-                        raise BlexError(f"original stage target is invalid: {state.target}")
-                    if not prepared_exists:
-                        raise BlexError(
-                            f"prepared stage target is missing without a backup: {state.prepared}"
-                        )
-            else:
-                if backup_exists:
-                    raise BlexError(f"unexpected backup for a new stage target: {state.backup}")
-                if target_exists:
-                    if prepared_exists:
-                        raise BlexError(
-                            f"rollback found both new target and prepared paths: {state.target}"
-                        )
-                    if is_symlink_or_reparse(state.target) or not state.target.is_dir():
-                        raise BlexError(
-                            f"new stage target cannot be rolled back safely: {state.target}"
-                        )
-                    state.prepared.parent.mkdir(parents=True, exist_ok=True)
-                    state.target.rename(state.prepared)
-                elif not prepared_exists:
-                    raise BlexError(f"new prepared stage target is missing: {state.prepared}")
-            state.state = "rolled_back"
-            _write_transaction(run_root, states)
-        except (OSError, BlexError) as error:
-            failures.append(f"{state.identifier}: {error}")
-    if failures:
-        raise BlexError("; ".join(failures))
+                raise BlexError(f"original stage target is invalid: {state.target}")
+            if not prepared_exists:
+                raise BlexError(
+                    f"prepared stage target is missing without a backup: {state.prepared}"
+                )
+    else:
+        if backup_exists:
+            raise BlexError(f"unexpected backup for a new stage target: {state.backup}")
+        if target_exists:
+            if prepared_exists:
+                raise BlexError(
+                    f"rollback found both new target and prepared paths: {state.target}"
+                )
+            if is_symlink_or_reparse(state.target) or not state.target.is_dir():
+                raise BlexError(f"new stage target cannot be rolled back safely: {state.target}")
+            state.prepared.parent.mkdir(parents=True, exist_ok=True)
+            state.target.rename(state.prepared)
+        elif not prepared_exists:
+            raise BlexError(f"new prepared stage target is missing: {state.prepared}")
+    state.state = "rolled_back"
+    _write_transaction(run_root, state)
 
 
 def _create_output_directory(

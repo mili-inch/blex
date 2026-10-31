@@ -13,6 +13,12 @@ from blex.core.errors import BlexError
 from blex.core.wheels import WheelArtifact
 
 
+@pytest.fixture(autouse=True)
+def native_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(stage, "current_python_version", lambda: "3.11")
+    monkeypatch.setattr(stage, "current_platform", lambda: "windows-x64")
+
+
 def _project(tmp_path: Path, *, python: str = "3.11") -> tuple[Path, Path]:
     root = tmp_path / "project"
     source = root / "src" / "demo_extension"
@@ -58,10 +64,6 @@ def _args(root: Path, **overrides: object) -> argparse.Namespace:
         "source_dir": None,
         "output_dir": None,
         "wheels": None,
-        "python": None,
-        "platform": ["windows-x64"],
-        "pip": None,
-        "uv": None,
         "refresh_wheels": False,
         "verbose": False,
     }
@@ -102,24 +104,10 @@ def test_configured_source_does_not_derive_an_unused_default(tmp_path: Path) -> 
     assert (root / "dist" / "py3.11" / "windows-x64" / "source" / "blender_manifest.toml").is_file()
 
 
-def test_stage_sorts_python_targets_and_preserves_unselected_output(tmp_path: Path) -> None:
-    root, _source = _project(tmp_path)
-    untouched = root / "dist" / "py3.12"
-    untouched.mkdir(parents=True)
-    marker = untouched / "owned.txt"
-    marker.write_text("keep", encoding="utf-8")
-
-    assert stage.run(_args(root, python=["3.14", "3.11"])) == 0
-
-    assert (root / "dist" / "py3.11" / "windows-x64" / "source").is_dir()
-    assert (root / "dist" / "py3.14" / "windows-x64" / "source").is_dir()
-    assert marker.read_text(encoding="utf-8") == "keep"
-
-
 def test_restage_replaces_selected_output(tmp_path: Path) -> None:
     root, _source = _project(tmp_path)
     assert stage.run(_args(root)) == 0
-    marker = root / "dist" / "py3.11" / "old.txt"
+    marker = root / "dist" / "py3.11" / "windows-x64" / "old.txt"
     marker.write_text("replace", encoding="utf-8")
 
     assert stage.run(_args(root)) == 0
@@ -132,10 +120,10 @@ def test_stage_uses_current_platform_and_verbose_output(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root, _source = _project(tmp_path)
-    assert stage.run(_args(root, platform=None, verbose=True)) == 0
+    assert stage.run(_args(root, verbose=True)) == 0
     output = capsys.readouterr().out
     assert "project root:" in output
-    assert "Platforms:" in output
+    assert "Platform:" in output
 
 
 def test_stage_rejects_missing_source_and_refresh_without_wheels(tmp_path: Path) -> None:
@@ -154,20 +142,6 @@ def test_stage_rejects_missing_source_and_refresh_without_wheels(tmp_path: Path)
         stage.run(_args(root, refresh_wheels=True))
 
 
-def test_stage_without_wheels_validates_but_does_not_resolve_pip(tmp_path: Path) -> None:
-    root, _source = _project(tmp_path)
-    with pytest.raises(BlexError, match="uv.*non-empty"):
-        stage.run(_args(root, uv=""))
-    with pytest.raises(BlexError, match="drive-relative"):
-        stage.run(_args(root, uv="C:uv.exe"))
-    with pytest.raises(BlexError, match="pip executable must not be empty"):
-        stage.run(_args(root, pip=" \t "))
-    with pytest.raises(BlexError, match="drive-relative"):
-        stage.run(_args(root, pip="C:"))
-
-    assert stage.run(_args(root, pip="definitely-missing-blex-test-pip")) == 0
-
-
 def test_stage_rejects_file_at_wheels_directory(tmp_path: Path) -> None:
     root, source = _project(tmp_path)
     (source / "wheels").write_bytes(b"file")
@@ -183,8 +157,8 @@ def test_stage_rejects_output_and_selected_target_files(tmp_path: Path) -> None:
     with pytest.raises(BlexError, match="output-dir"):
         stage.run(_args(root, output_dir="blocked"))
 
-    target = root / "dist" / "py3.11"
-    target.parent.mkdir()
+    target = root / "dist" / "py3.11" / "windows-x64"
+    target.parent.mkdir(parents=True)
     target.write_bytes(b"file")
     with pytest.raises(BlexError, match="selected stage target"):
         stage.run(_args(root))
@@ -223,19 +197,19 @@ def test_commit_failure_rolls_back_existing_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, _source = _project(tmp_path)
-    old_target = root / "dist" / "py3.11"
+    old_target = root / "dist" / "py3.11" / "windows-x64"
     old_target.mkdir(parents=True)
     old_marker = old_target / "old.txt"
     old_marker.write_text("original", encoding="utf-8")
     original_write = stage._write_transaction
     calls = 0
 
-    def fail_after_install(run_root: Path, states: list[stage._TargetState]) -> None:
+    def fail_after_install(run_root: Path, state: stage._TargetState) -> None:
         nonlocal calls
         calls += 1
         if calls == 3:
             raise OSError("simulated transaction record failure")
-        original_write(run_root, states)
+        original_write(run_root, state)
 
     monkeypatch.setattr(stage, "_write_transaction", fail_after_install)
     with pytest.raises(BlexError, match="filesystem operation failed"):
@@ -257,7 +231,7 @@ def test_interrupt_after_commit_rename_restores_original_state(
     transition: str,
 ) -> None:
     root, _source = _project(tmp_path)
-    target = root / "dist" / "py3.11"
+    target = root / "dist" / "py3.11" / "windows-x64"
     marker = target / "old.txt"
     if existing_target:
         target.mkdir(parents=True)
@@ -271,12 +245,8 @@ def test_interrupt_after_commit_rename_restores_original_state(
         result = real_rename(path, destination)
         destination_path = Path(destination)
         is_selected_transition = (
-            transition == "backup" and path == target and destination_path.parent.name == "backups"
-        ) or (
-            transition == "install"
-            and path.parent.name == "prepared"
-            and destination_path == target
-        )
+            transition == "backup" and path == target and destination_path.name == "backup"
+        ) or (transition == "install" and path.name == "prepared" and destination_path == target)
         if is_selected_transition and not interrupted:
             interrupted = True
             raise KeyboardInterrupt
@@ -359,4 +329,16 @@ def test_rollback_refuses_a_missing_installed_target(tmp_path: Path) -> None:
         state="installed",
     )
     with pytest.raises(BlexError, match="py3.11"):
-        stage._rollback(root, run_root, [state])
+        stage._rollback(root, run_root, state)
+
+
+def test_native_stage_ignores_version_file_and_preserves_other_environments(tmp_path: Path) -> None:
+    root, _source = _project(tmp_path, python="not-a-version")
+    preserved = [root / "dist" / "py3.12", root / "dist" / "py3.11" / "linux-x64"]
+    for target in preserved:
+        target.mkdir(parents=True)
+        (target / "owned.txt").write_text("keep", encoding="utf-8")
+    assert stage.run(_args(root)) == 0
+    assert (root / "dist" / "py3.11" / "windows-x64" / "source").is_dir()
+    for target in preserved:
+        assert (target / "owned.txt").read_text(encoding="utf-8") == "keep"

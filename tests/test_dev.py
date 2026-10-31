@@ -121,9 +121,6 @@ def _args(root: Path, blender_path: Path, **overrides: object) -> argparse.Names
         "debugpy_host": None,
         "debugpy_port": None,
         "wheels": None,
-        "python": None,
-        "pip": None,
-        "uv": None,
         "refresh_wheels": False,
         "blender_args": [],
         "verbose": False,
@@ -271,8 +268,6 @@ def test_run_validates_disabled_feature_options_before_launch(
         dev.run(_args(root, executable, debugpy_host="127.0.0.1"))
     with pytest.raises(BlexError, match="refresh-wheels"):
         dev.run(_args(root, executable, refresh_wheels=True))
-    with pytest.raises(BlexError, match="invalid Python version"):
-        dev.run(_args(root, executable, python="03.11"))
 
 
 def test_run_validates_enabled_values_and_verbose_output(
@@ -318,11 +313,6 @@ def test_run_validates_enabled_values_and_verbose_output(
         dev.run(_args(root, executable, blender_args=["bad\x00argument"]))
     with pytest.raises(BlexError, match="Blender executable must not be empty"):
         dev.run(_args(root, executable, blender=""))
-    with pytest.raises(BlexError, match="pip executable must not be empty"):
-        dev.run(_args(root, executable, pip=" \t "))
-    with pytest.raises(BlexError, match="drive-relative"):
-        dev.run(_args(root, executable, pip="C:"))
-    assert dev.run(_args(root, executable, pip="definitely-missing-blex-test-pip")) == 0
 
 
 def test_run_rejects_missing_source_directory(tmp_path: Path) -> None:
