@@ -300,6 +300,15 @@ hidden files and `__pycache__`; manifest `paths_exclude_pattern` entries are not
 used as copy filters. `blex stage` does not start Blender, run Blender's Extension
 build command, or create a ZIP archive.
 
+## Package builds
+
+blex uses Hatchling as its PEP 517 build backend. Build its sdist and Wheel with:
+
+```console
+python -m pip install build
+python -m build
+```
+
 ## Contributing
 
 ```console

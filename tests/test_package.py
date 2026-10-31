@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-import shutil
+import sys
+import tarfile
 import subprocess
 import zipfile
 from importlib import metadata, resources
@@ -34,7 +35,7 @@ def test_distribution_metadata_matches_runtime_contract() -> None:
     assert distribution.metadata["Name"] == "blex"
     assert distribution.metadata["License-Expression"] == "GPL-3.0-or-later"
     assert distribution.metadata.get_all("License-File") == ["LICENSE"]
-    assert distribution.requires == ["tomlkit>=0.15,<0.16"]
+    assert distribution.requires == ["tomlkit<0.16,>=0.15"]
 
 
 def test_vendored_debugpy_wheel_and_license() -> None:
@@ -49,14 +50,11 @@ def test_vendored_debugpy_wheel_and_license() -> None:
 
 
 def test_built_wheel_contains_all_runtime_resources(tmp_path: Path) -> None:
-    uv = shutil.which("uv")
-    assert uv is not None, "uv is required to verify the package artifact"
     output_directory = tmp_path / "dist"
     environment = dict(os.environ)
-    environment["UV_OFFLINE"] = "1"
-    environment["UV_NO_PROGRESS"] = "1"
+    environment["PIP_NO_INDEX"] = "1"
     result = subprocess.run(
-        [uv, "build", "--wheel", "--offline", "--out-dir", str(output_directory)],
+        [sys.executable, "-m", "build", "--no-isolation", "--outdir", str(output_directory)],
         cwd=_PROJECT_ROOT,
         env=environment,
         capture_output=True,
@@ -93,3 +91,17 @@ def test_built_wheel_contains_all_runtime_resources(tmp_path: Path) -> None:
         )
         assert len(root_licenses) == 1
         assert archive.read(root_licenses[0]) == (_PROJECT_ROOT / "LICENSE").read_bytes()
+
+    sdists = tuple(output_directory.glob("blex-*.tar.gz"))
+    assert len(sdists) == 1
+    with tarfile.open(sdists[0]) as archive:
+        names = archive.getnames()
+        prefix = names[0].split("/")[0]
+        for relative in (
+            *_TEMPLATE_FILES,
+            f"vendor/{_DEBUGPY_WHEEL}",
+            "vendor/licenses/debugpy/LICENSE",
+        ):
+            member = archive.extractfile(f"{prefix}/src/blex/{relative}")
+            assert member is not None
+            assert member.read() == (_PROJECT_ROOT / "src" / "blex" / relative).read_bytes()

@@ -66,8 +66,14 @@ blex自身の`pyproject.toml`は次を基準とする。
 
 ```toml
 [build-system]
-requires = ["uv_build>=0.12.3,<0.13"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.26,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blex"]
+
+[tool.hatch.build]
+artifacts = ["src/blex/vendor/*.whl"]
 
 [project]
 name = "blex"
@@ -85,6 +91,9 @@ blex = "blex.main:main"
 
 [dependency-groups]
 dev = [
+    "build>=1.3,<2",
+    "hatchling>=1.26,<2",
+    "pip>=25.1,<27",
     "pytest>=9.1,<10",
     "pytest-cov>=7.1,<8",
     "ruff>=0.16,<0.17",
@@ -95,6 +104,8 @@ dev = [
 - authorsおよびproject URLsは設定しない。
 - リポジトリルートにGPLv3全文の`LICENSE`を配置する。
 - `uv.lock`をコミットする。
+- build frontendはPyPA `build`とし、`python -m build`でsdistとWheelを作成する。
+- sdistとWheelにはtemplates、同梱Wheel、licenseを含める。sdistからも同じ資源を含むWheelをbuildできる。
 - distribution versionは`importlib.metadata.version("blex")`から取得する。
 
 ### 3.2 パッケージ構成
