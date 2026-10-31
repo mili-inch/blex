@@ -10,13 +10,17 @@ import tomlkit
 from blex.commands import stage
 from blex.core.cache import sha256_file
 from blex.core.errors import BlexError
+from blex.core.environment import NativeEnvironment
 from blex.core.wheels import WheelArtifact
 
 
 @pytest.fixture(autouse=True)
 def native_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(stage, "current_python_version", lambda: "3.11")
-    monkeypatch.setattr(stage, "current_platform", lambda: "windows-x64")
+    monkeypatch.setattr(
+        stage,
+        "capture_native_environment",
+        lambda: NativeEnvironment(Path("python"), "windows-x64", {"python_version": "3.11"}),
+    )
 
 
 def _project(tmp_path: Path, *, python: str = "3.11") -> tuple[Path, Path]:

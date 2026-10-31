@@ -16,6 +16,7 @@ from blex.adapters import blender as blender_adapter
 from blex.commands import dev as dev_command
 from blex.commands import init as init_command
 from blex.core import wheels
+from blex.core.environment import capture_native_environment
 from blex.core.errors import BlexError, InitError
 
 
@@ -388,7 +389,9 @@ def test_real_native_pip_process_and_cache_hit(
     options = dict(
         project_root=root,
         source_dir=source,
-        manifest={},
+        wheel_paths=(),
+        native=capture_native_environment(),
+        environment=dict(os.environ),
         dependencies=("fake-dependency==1",),
         automatic=True,
         refresh=False,
@@ -423,7 +426,9 @@ def test_real_native_pip_failure_preserves_no_completed_cache(
         wheels.resolve_wheels(
             project_root=root,
             source_dir=source,
-            manifest={},
+            wheel_paths=(),
+            native=capture_native_environment(),
+            environment=dict(os.environ),
             dependencies=("fake-dependency==1",),
             automatic=True,
             refresh=False,

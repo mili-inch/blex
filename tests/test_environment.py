@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import platform
 import sys
+from pathlib import Path
 
 import pytest
 from pip._vendor.packaging.markers import default_environment
 
-from blex.core.environment import current_platform, current_python_version, resolution_environment
+from blex.core.environment import (
+    capture_native_environment,
+    current_platform,
+    current_python_version,
+    resolution_environment,
+)
 from blex.core.errors import BlexError
 
 
@@ -35,7 +41,12 @@ def test_unsupported_platform(system: str, machine: str) -> None:
 
 
 def test_native_environment_covers_pip_markers() -> None:
-    actual = resolution_environment()
+    native = capture_native_environment()
+    actual = native.runtime
+    assert native.python_executable == Path(sys.executable)
+    assert native.platform_name == current_platform()
+    assert native.python_version == current_python_version()
+    assert actual == resolution_environment()
     for key, value in default_environment().items():
         assert actual[key] == value
     assert current_python_version() == f"{sys.version_info.major}.{sys.version_info.minor}"

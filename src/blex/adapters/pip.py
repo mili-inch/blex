@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 import subprocess
 
@@ -10,12 +10,16 @@ from blex.core.cache import CachedWheel, sha256_file
 from blex.core.errors import BlexError
 
 
-def get_pip_version(python_executable: Path, *, verbose: bool = False) -> str:
+def get_pip_version(
+    python_executable: Path, *, environment: Mapping[str, str], verbose: bool = False
+) -> str:
     command = [str(python_executable), "-m", "pip", "--version"]
     if verbose:
         print(f"pip version command: {subprocess.list2cmdline(command)}")
     try:
-        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        result = subprocess.run(
+            command, check=False, capture_output=True, text=True, env=dict(environment)
+        )
     except OSError as error:
         raise BlexError(f"failed to execute pip with {python_executable}: {error}") from error
     output = result.stdout.strip()
@@ -33,6 +37,7 @@ def download_wheels(
     *,
     dependencies: Sequence[str],
     destination: Path,
+    environment: Mapping[str, str],
     verbose: bool = False,
 ) -> tuple[CachedWheel, ...]:
     """Resolve the full dependency closure in this interpreter's environment."""
@@ -52,7 +57,7 @@ def download_wheels(
     if verbose:
         print(f"pip download command: {subprocess.list2cmdline(command)}")
     try:
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=dict(environment))
     except OSError as error:
         raise BlexError(f"failed to execute pip with {python_executable}: {error}") from error
     if result.returncode != 0:

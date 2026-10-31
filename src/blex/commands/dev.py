@@ -23,7 +23,7 @@ from blex.adapters.blender import (
 )
 from blex.core.cache import FileLock, sha256_file
 from blex.core.config import select_value
-from blex.core.environment import current_platform
+from blex.core.environment import capture_native_environment
 from blex.core.filesystem import ensure_blex_root, ensure_managed_directory
 from blex.core.errors import BlexError
 from blex.core.manifest import ManifestData, load_manifest, update_manifest_for_target
@@ -596,7 +596,8 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
     validate_source_tree(source_dir)
     manifest = load_manifest(source_dir)
 
-    platform_name = current_platform()
+    native = capture_native_environment()
+    environment = dict(os.environ)
     link_mode: str = select_value(args.link_mode, config.dev.link_mode, "auto")
     reload_panel: bool = select_value(args.reload_panel, config.dev.reload_panel, True)
     debugpy_enabled: bool = select_value(args.debugpy, config.dev.debugpy, False)
@@ -639,7 +640,9 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
     artifacts = resolve_wheels(
         project_root=project_root,
         source_dir=source_dir,
-        manifest=manifest.document,
+        wheel_paths=manifest.wheels,
+        native=native,
+        environment=environment,
         dependencies=project.dependencies,
         automatic=automatic_wheels,
         refresh=args.refresh_wheels,
@@ -657,7 +660,7 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
         blex_root=blex_root,
         source_dir=source_dir,
         manifest=manifest,
-        platform=platform_name,
+        platform=native.platform_name,
         artifacts=artifacts,
         seed=seed,
     )
@@ -675,7 +678,6 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
         debugpy_port=debugpy_port,
     )
 
-    environment = dict(os.environ)
     environment["BLENDER_USER_RESOURCES"] = str(runtime_root.resolve(strict=True))
     for variable in _BLENDER_ENVIRONMENT_OVERRIDES:
         environment.pop(variable, None)

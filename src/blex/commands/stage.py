@@ -8,14 +8,14 @@ import json
 import os
 from pathlib import Path
 import shutil
-from typing import Any
 import uuid
 
 import tomlkit
+from tomlkit.toml_document import TOMLDocument
 
 from blex.core.cache import FileLock, sha256_file
 from blex.core.config import select_value
-from blex.core.environment import current_platform, current_python_version
+from blex.core.environment import capture_native_environment
 from blex.core.errors import BlexError
 from blex.core.manifest import load_manifest, update_manifest_for_target
 from blex.core.project import (
@@ -88,8 +88,10 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
     if not automatic and args.refresh_wheels:
         raise BlexError("--refresh-wheels cannot be used with --no-wheels")
 
-    python_version = current_python_version()
-    platform_name = current_platform()
+    native = capture_native_environment()
+    python_version = native.python_version
+    platform_name = native.platform_name
+    environment = dict(os.environ)
     output_value = select_value(args.output_dir, project.config.stage.output_dir, "dist")
     output_dir = _resolve_output_dir(root, source_dir, output_value)
     target = output_dir / f"py{python_version}" / platform_name
@@ -118,8 +120,10 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
         artifacts = resolve_wheels(
             project_root=root,
             source_dir=source_dir,
-            manifest=manifest.document,
+            wheel_paths=manifest.wheels,
             dependencies=project.dependencies,
+            native=native,
+            environment=environment,
             automatic=automatic,
             refresh=args.refresh_wheels,
             verbose=verbose,
@@ -155,7 +159,7 @@ def _prepare_target(
     *,
     source_dir: Path,
     prepared: Path,
-    manifest_document: Any,
+    manifest_document: TOMLDocument,
     platforms: tuple[str, ...],
     artifacts: tuple[WheelArtifact, ...],
 ) -> None:

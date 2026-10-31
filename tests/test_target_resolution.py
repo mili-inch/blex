@@ -13,6 +13,7 @@ import tomlkit
 from pip._vendor.packaging.tags import sys_tags
 
 from blex.core import wheels
+from blex.core.environment import capture_native_environment
 from blex.core.environment import current_platform, current_python_version
 from blex.main import main
 
@@ -138,7 +139,9 @@ def test_refresh_preserves_previously_resolved_wheel_and_runtime_link(
         return wheels.resolve_wheels(
             project_root=root,
             source_dir=source,
-            manifest={},
+            wheel_paths=(),
+            native=capture_native_environment(),
+            environment=dict(os.environ),
             dependencies=("refreshprobe",),
             automatic=True,
             refresh=refresh,

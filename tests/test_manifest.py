@@ -50,6 +50,7 @@ def test_invalid_manifest_id(value: str) -> None:
         _manifest("platforms = []\n"),
         _manifest("wheels = []\n"),
         _manifest("wheels = [1]\n"),
+        _manifest('wheels = "./demo.whl"\n'),
     ],
 )
 def test_invalid_manifest_document(text: str) -> None:

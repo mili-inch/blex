@@ -5,14 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-import sys
 import re
 import shutil
-from typing import Any
 import uuid
 
 from blex.adapters.pip import download_wheels, get_pip_version
-from blex.core.environment import current_platform, current_python_version, resolution_environment
+from blex.core.environment import NativeEnvironment
 from blex.core.cache import (
     CachedWheel,
     FileLock,
@@ -78,15 +76,17 @@ def resolve_wheels(
     *,
     project_root: Path,
     source_dir: Path,
-    manifest: Mapping[str, Any],
+    wheel_paths: Sequence[str],
     dependencies: Sequence[str],
+    native: NativeEnvironment,
+    environment: Mapping[str, str],
     automatic: bool,
     refresh: bool,
     verbose: bool = False,
 ) -> tuple[WheelArtifact, ...]:
     """Resolve manual and native automatic Wheels for the running interpreter."""
 
-    manual = _manual_wheels(source_dir, manifest)
+    manual = _manual_wheels(source_dir, wheel_paths)
     if not automatic:
         if refresh:
             raise BlexError("--refresh-wheels cannot be used when automatic Wheels are disabled")
@@ -96,19 +96,18 @@ def resolve_wheels(
     if not dependencies:
         return _merge_artifacts(manual)
 
-    python_executable = Path(sys.executable)
-    pip_version = get_pip_version(python_executable, verbose=verbose)
-    python_version = current_python_version()
-    platform_name = current_platform()
-    runtime = resolution_environment()
+    pip_version = get_pip_version(
+        native.python_executable, environment=environment, verbose=verbose
+    )
     cached = _resolve_cached_target(
         project_root=project_root,
         dependencies=dependencies,
-        python_version=python_version,
-        platform_name=platform_name,
-        python_executable=python_executable,
+        python_version=native.python_version,
+        platform_name=native.platform_name,
+        python_executable=native.python_executable,
         pip_version=pip_version,
-        runtime=runtime,
+        runtime=native.runtime,
+        environment=environment,
         refresh=refresh,
         verbose=verbose,
     )
@@ -121,25 +120,18 @@ def resolve_wheels(
 
 def _manual_wheels(
     source_dir: Path,
-    manifest: Mapping[str, Any],
+    wheel_paths: Sequence[str],
 ) -> tuple[WheelArtifact, ...]:
-    raw_wheels = manifest.get("wheels")
-    if raw_wheels is None:
+    """Resolve already schema-validated Manifest paths inside the source tree."""
+    if not wheel_paths:
         return ()
-    if (
-        not isinstance(raw_wheels, Sequence)
-        or isinstance(raw_wheels, (str, bytes))
-        or not raw_wheels
-        or any(not isinstance(value, str) or not value for value in raw_wheels)
-    ):
-        raise BlexError("Manifest wheels must be a non-empty array of non-empty strings")
 
     try:
         source_real = source_dir.resolve(strict=True)
     except (OSError, RuntimeError) as error:
         raise BlexError(f"cannot resolve source directory: {source_dir}") from error
     artifacts = []
-    for raw_path in raw_wheels:
+    for raw_path in wheel_paths:
         relative = _validate_manual_wheel_path(raw_path)
         wheel_path = source_dir.joinpath(*relative.parts)
         try:
@@ -185,6 +177,7 @@ def _resolve_cached_target(
     python_executable: Path,
     pip_version: str,
     runtime: Mapping[str, str],
+    environment: Mapping[str, str],
     refresh: bool,
     verbose: bool,
 ) -> tuple[CachedWheel, ...]:
@@ -194,6 +187,7 @@ def _resolve_cached_target(
         platform_name,
         python_executable,
         pip_version,
+        environment,
         runtime=runtime,
     )
     entry = cache_entry_path(project_root, python_version, platform_name, fingerprint)
@@ -235,6 +229,7 @@ def _resolve_cached_target(
                 python_executable,
                 dependencies=dependencies,
                 destination=temporary,
+                environment=environment,
                 verbose=verbose,
             )
             write_cache_metadata(

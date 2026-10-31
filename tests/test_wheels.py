@@ -10,7 +10,7 @@ import sys
 from typing import Any
 
 import pytest
-import tomlkit
+from collections.abc import Mapping
 
 from blex.adapters import pip as pip_adapter
 from blex.core.cache import (
@@ -24,15 +24,13 @@ from blex.core.cache import (
 )
 from blex.core.errors import BlexError
 from blex.core import wheels, filesystem
+from blex.core.environment import NativeEnvironment
 
-_RUNTIME = {"python_full_version": "3.11.9"}
+_RUNTIME = {"python_full_version": "3.11.9", "python_version": "3.11"}
 
 
-@pytest.fixture(autouse=True)
-def native_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wheels, "current_python_version", lambda: "3.11")
-    monkeypatch.setattr(wheels, "current_platform", lambda: "windows-x64")
-    monkeypatch.setattr(wheels, "resolution_environment", lambda: dict(_RUNTIME))
+_NATIVE = NativeEnvironment(Path(sys.executable), "windows-x64", _RUNTIME)
+_PROCESS_ENVIRONMENT = {"PIP_BLEX_TEST_TOKEN": "must-not-be-persisted"}
 
 
 def _source(tmp_path: Path, manifest_text: str = 'schema_version = "1.0.0"\n') -> Path:
@@ -84,6 +82,7 @@ def test_pip_download_command_and_inherited_streams(
         executable,
         dependencies=("demo[extra]>=1", 'other; python_version >= "3.11"'),
         destination=destination,
+        environment=_PROCESS_ENVIRONMENT,
     )
 
     assert observed == [
@@ -102,7 +101,7 @@ def test_pip_download_command_and_inherited_streams(
                 "demo[extra]>=1",
                 'other; python_version >= "3.11"',
             ],
-            {"check": False},
+            {"check": False, "env": _PROCESS_ENVIRONMENT},
         )
     ]
     assert downloaded[0].filename == "demo.whl"
@@ -119,6 +118,7 @@ def test_pip_download_failure_is_handled(tmp_path: Path, monkeypatch: pytest.Mon
             tmp_path / "pip",
             dependencies=("demo",),
             destination=tmp_path,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
 
@@ -133,7 +133,7 @@ def test_pip_version_failure_includes_captured_output(
         ),
     )
     with pytest.raises(BlexError, match="version stdout") as error:
-        pip_adapter.get_pip_version(tmp_path / "pip")
+        pip_adapter.get_pip_version(tmp_path / "pip", environment=_PROCESS_ENVIRONMENT)
     assert "version stderr" in str(error.value)
     assert "install pip in this Python environment" in str(error.value)
     assert str(tmp_path / "pip") in str(error.value)
@@ -150,7 +150,10 @@ def test_pip_version_success_verbose_and_execution_error(
             command, 0, stdout="pip 99\n", stderr=""
         ),
     )
-    assert pip_adapter.get_pip_version(executable, verbose=True) == "pip 99"
+    assert (
+        pip_adapter.get_pip_version(executable, verbose=True, environment=_PROCESS_ENVIRONMENT)
+        == "pip 99"
+    )
     assert "pip version command" in capsys.readouterr().out
 
     def fail_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -158,7 +161,7 @@ def test_pip_version_success_verbose_and_execution_error(
 
     monkeypatch.setattr(pip_adapter.subprocess, "run", fail_run)
     with pytest.raises(BlexError, match="failed to execute"):
-        pip_adapter.get_pip_version(executable)
+        pip_adapter.get_pip_version(executable, environment=_PROCESS_ENVIRONMENT)
 
 
 def test_pip_download_verbose_execution_error_and_unexpected_artifact(
@@ -174,6 +177,7 @@ def test_pip_download_verbose_execution_error_and_unexpected_artifact(
             dependencies=("demo",),
             destination=tmp_path,
             verbose=True,
+            environment=_PROCESS_ENVIRONMENT,
         )
     assert "pip download command" in capsys.readouterr().out
 
@@ -188,6 +192,7 @@ def test_pip_download_verbose_execution_error_and_unexpected_artifact(
             tmp_path / "pip",
             dependencies=("demo",),
             destination=tmp_path,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
 
@@ -352,15 +357,17 @@ def test_manual_wheels_work_without_pip(tmp_path: Path, monkeypatch: pytest.Monk
     manual = source / "vendor" / "demo.whl"
     manual.parent.mkdir()
     manual.write_bytes(b"manual")
-    manifest = tomlkit.parse('wheels = ["./vendor/demo.whl"]\n')
+    wheel_paths = ("./vendor/demo.whl",)
 
     artifacts = wheels.resolve_wheels(
         project_root=tmp_path,
         source_dir=source,
-        manifest=manifest,
+        wheel_paths=wheel_paths,
         dependencies=("../unsupported",),
         automatic=False,
         refresh=False,
+        native=_NATIVE,
+        environment=_PROCESS_ENVIRONMENT,
     )
 
     assert [artifact.manifest_entry for artifact in artifacts] == ["./vendor/demo.whl"]
@@ -379,7 +386,9 @@ def test_wheel_resolution_mode_validation_and_empty_dependencies(
     base = {
         "project_root": tmp_path,
         "source_dir": source,
-        "manifest": tomlkit.document(),
+        "wheel_paths": (),
+        "native": _NATIVE,
+        "environment": _PROCESS_ENVIRONMENT,
         "dependencies": (),
     }
     assert (
@@ -399,25 +408,18 @@ def test_wheel_resolution_mode_validation_and_empty_dependencies(
         )
 
 
-def test_manual_wheel_manifest_shape_and_missing_file(tmp_path: Path) -> None:
+def test_manual_wheel_missing_file(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    with pytest.raises(BlexError, match="array"):
-        wheels.resolve_wheels(
-            project_root=tmp_path,
-            source_dir=source,
-            manifest={"wheels": "./demo.whl"},
-            dependencies=(),
-            automatic=False,
-            refresh=False,
-        )
     with pytest.raises(BlexError, match="inside source-dir"):
         wheels.resolve_wheels(
             project_root=tmp_path,
             source_dir=source,
-            manifest={"wheels": ["./missing.whl"]},
+            wheel_paths=("./missing.whl",),
             dependencies=(),
             automatic=False,
             refresh=False,
+            native=_NATIVE,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
 
@@ -444,16 +446,17 @@ def test_artifact_merge_conflict_and_deduplication(tmp_path: Path) -> None:
 )
 def test_invalid_manual_wheel_paths_are_rejected(tmp_path: Path, entry: str) -> None:
     source = _source(tmp_path)
-    manifest = tomlkit.document()
-    manifest["wheels"] = [entry]
+    wheel_paths = (entry,)
     with pytest.raises(BlexError):
         wheels.resolve_wheels(
             project_root=tmp_path,
             source_dir=source,
-            manifest=manifest,
+            wheel_paths=wheel_paths,
             dependencies=(),
             automatic=False,
             refresh=False,
+            native=_NATIVE,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
 
@@ -465,10 +468,12 @@ def test_nested_drive_relative_manual_wheel_cannot_reset_windows_join(tmp_path: 
         wheels.resolve_wheels(
             project_root=tmp_path,
             source_dir=source,
-            manifest={"wheels": ["wheels/C:demo.whl"]},
+            wheel_paths=("wheels/C:demo.whl",),
             dependencies=(),
             automatic=False,
             refresh=False,
+            native=_NATIVE,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
 
@@ -476,15 +481,17 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
     source = _source(tmp_path)
     fake_pip = Path(sys.executable)
     calls: list[str] = []
-    monkeypatch.setenv("PIP_BLEX_TEST_TOKEN", "must-not-be-persisted")
 
-    monkeypatch.setattr(wheels, "get_pip_version", lambda _path, verbose=False: "pip 99")
+    monkeypatch.setattr(
+        wheels, "get_pip_version", lambda _path, *, environment, verbose=False: "pip 99"
+    )
 
     def fake_download(
         _executable: Path,
         *,
         dependencies: tuple[str, ...],
         destination: Path,
+        environment: Mapping[str, str],
         verbose: bool,
     ) -> tuple[CachedWheel, ...]:
         del dependencies, verbose
@@ -497,7 +504,9 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
     options = {
         "project_root": tmp_path,
         "source_dir": source,
-        "manifest": tomlkit.document(),
+        "wheel_paths": (),
+        "native": _NATIVE,
+        "environment": _PROCESS_ENVIRONMENT,
         "dependencies": ("demo>=1",),
         "automatic": True,
         "refresh": False,
@@ -515,6 +524,7 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
         fake_pip,
         "pip 99",
         runtime=_RUNTIME,
+        environment=_PROCESS_ENVIRONMENT,
     )
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     assert "must-not-be-persisted" not in (entry / "metadata.json").read_text(encoding="utf-8")
@@ -528,6 +538,66 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
     refreshed = wheels.resolve_wheels(**refreshed_options)
     assert calls == ["download", "download"]
     assert refreshed[0].source.is_file()
+
+
+def test_resolution_uses_explicit_target_and_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source(tmp_path)
+    native = NativeEnvironment(tmp_path / "selected-python", "linux-x64", _RUNTIME)
+    environment = {"PIP_INDEX_URL": "https://selected.invalid", "CUSTOM": "inherited"}
+    downloads: list[dict[str, str]] = []
+
+    def version(executable: Path, *, environment: Mapping[str, str], verbose: bool) -> str:
+        assert executable == native.python_executable
+        assert environment["CUSTOM"] == "inherited"
+        return "pip 99"
+
+    def download(
+        executable: Path,
+        *,
+        dependencies: tuple[str, ...],
+        destination: Path,
+        environment: Mapping[str, str],
+        verbose: bool,
+    ) -> tuple[CachedWheel, ...]:
+        assert executable == native.python_executable
+        downloads.append(dict(environment))
+        wheel = destination / "demo.whl"
+        wheel.write_bytes(b"wheel")
+        return (CachedWheel(wheel, wheel.name, sha256_file(wheel)),)
+
+    monkeypatch.setattr(wheels, "get_pip_version", version)
+    monkeypatch.setattr(wheels, "download_wheels", download)
+    options = dict(
+        project_root=tmp_path,
+        source_dir=source,
+        wheel_paths=(),
+        dependencies=("demo",),
+        native=native,
+        environment=environment,
+        automatic=True,
+        refresh=False,
+    )
+    monkeypatch.setenv("PIP_INDEX_URL", "https://ambient-first.invalid")
+    first = wheels.resolve_wheels(**options)
+    monkeypatch.setenv("PIP_INDEX_URL", "https://ambient-second.invalid")
+    assert wheels.resolve_wheels(**options) == first
+    assert downloads == [environment]
+    assert environment == {
+        "PIP_INDEX_URL": "https://selected.invalid",
+        "CUSTOM": "inherited",
+    }
+    changed = {**environment, "PIP_INDEX_URL": "https://changed.invalid"}
+    wheels.resolve_wheels(**{**options, "environment": changed})
+    assert downloads == [environment, changed]
+    metadata_paths = list((tmp_path / ".blex" / "wheels").rglob("metadata.json"))
+    assert len(metadata_paths) == 2
+    for path in metadata_paths:
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        assert metadata["platform"] == "linux-x64"
+        assert metadata["pip"]["python_executable"] == native.python_executable.as_posix()
+        assert metadata["runtime"] == dict(native.runtime)
 
 
 @pytest.mark.parametrize("transition", ("backup", "install"))
@@ -549,6 +619,7 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         *,
         dependencies: tuple[str, ...],
         destination: Path,
+        environment: Mapping[str, str],
         verbose: bool,
     ) -> tuple[CachedWheel, ...]:
         del dependencies, verbose
@@ -565,6 +636,7 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         "python_executable": fake_pip,
         "pip_version": pip_version,
         "runtime": _RUNTIME,
+        "environment": _PROCESS_ENVIRONMENT,
         "verbose": False,
     }
     wheels._resolve_cached_target(**arguments, refresh=False)
@@ -575,6 +647,7 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         fake_pip,
         pip_version,
         runtime=_RUNTIME,
+        environment=_PROCESS_ENVIRONMENT,
     )
     entry = cache_entry_path(tmp_path, python_version, platform_name, fingerprint)
     original_rename = Path.rename
@@ -635,6 +708,7 @@ def test_cache_temporary_creation_interrupt_cleans_created_directory(
         fake_pip,
         "pip 99",
         runtime=_RUNTIME,
+        environment=_PROCESS_ENVIRONMENT,
     )
     original_mkdir = Path.mkdir
     interrupted = False
@@ -663,6 +737,7 @@ def test_cache_temporary_creation_interrupt_cleans_created_directory(
             refresh=False,
             verbose=False,
             runtime=_RUNTIME,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
     assert interrupted is True
@@ -685,6 +760,7 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         *,
         dependencies: tuple[str, ...],
         destination: Path,
+        environment: Mapping[str, str],
         verbose: bool,
     ) -> tuple[CachedWheel, ...]:
         del dependencies, verbose
@@ -701,6 +777,7 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         "python_executable": fake_pip,
         "pip_version": "pip 99",
         "runtime": _RUNTIME,
+        "environment": _PROCESS_ENVIRONMENT,
         "verbose": False,
     }
     wheels._resolve_cached_target(**arguments, refresh=False)
@@ -724,6 +801,7 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         fake_pip,
         "pip 99",
         runtime=_RUNTIME,
+        environment=_PROCESS_ENVIRONMENT,
     )
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     assert (entry / "demo-1-py3-none-any.whl").read_bytes() == b"new"
@@ -746,6 +824,7 @@ def test_refresh_rejects_reparse_cache_entry_before_download(
         fake_pip,
         "pip 99",
         runtime=_RUNTIME,
+        environment=_PROCESS_ENVIRONMENT,
     )
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     entry.mkdir(parents=True)
@@ -767,6 +846,7 @@ def test_refresh_rejects_reparse_cache_entry_before_download(
             refresh=True,
             verbose=False,
             runtime=_RUNTIME,
+            environment=_PROCESS_ENVIRONMENT,
         )
 
     assert entry.is_dir()
@@ -778,7 +858,9 @@ def test_failed_download_removes_temporary_cache_entry(
     source = _source(tmp_path)
     fake_pip = tmp_path / "pip"
     fake_pip.write_bytes(b"pip")
-    monkeypatch.setattr(wheels, "get_pip_version", lambda _path, verbose=False: "pip 99")
+    monkeypatch.setattr(
+        wheels, "get_pip_version", lambda _path, *, environment, verbose=False: "pip 99"
+    )
 
     def fail_download(*args: object, **kwargs: object) -> tuple[CachedWheel, ...]:
         raise BlexError("download failed")
@@ -788,11 +870,13 @@ def test_failed_download_removes_temporary_cache_entry(
         wheels.resolve_wheels(
             project_root=tmp_path,
             source_dir=source,
-            manifest=tomlkit.document(),
+            wheel_paths=(),
             dependencies=("demo",),
             automatic=True,
             refresh=False,
             verbose=True,
+            native=_NATIVE,
+            environment=_PROCESS_ENVIRONMENT,
         )
     cache_parent = tmp_path / ".blex" / "wheels" / "py3.11" / "windows-x64"
     assert list(cache_parent.iterdir()) == []

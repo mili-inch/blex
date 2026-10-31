@@ -34,7 +34,7 @@ def wheel_fingerprint(
     platform_name: str,
     python_executable: Path,
     pip_version: str,
-    environment: Mapping[str, str] | None = None,
+    environment: Mapping[str, str],
     *,
     runtime: Mapping[str, str],
 ) -> str:
@@ -44,9 +44,8 @@ def wheel_fingerprint(
     are deliberately not returned or persisted anywhere else.
     """
 
-    source_environment = os.environ if environment is None else environment
     pip_environment = {
-        key: value for key, value in source_environment.items() if key.upper().startswith("PIP_")
+        key: value for key, value in environment.items() if key.upper().startswith("PIP_")
     }
     payload = {
         "format": 1,

@@ -16,6 +16,7 @@ import tomlkit
 from blex.commands import dev
 from blex.core.errors import BlexError
 from blex.core.cache import FileLock, sha256_file
+from blex.core.environment import NativeEnvironment
 from blex.core.filesystem import ensure_blex_root, ensure_managed_directory
 from blex.core.manifest import load_manifest
 from blex.core.wheels import WheelArtifact
@@ -185,7 +186,11 @@ def test_run_creates_isolated_runtime_and_launches_exact_command(
         captured["environment"] = environment
         return 19
 
-    monkeypatch.setattr(dev, "current_platform", lambda: "windows-x64")
+    monkeypatch.setattr(
+        dev,
+        "capture_native_environment",
+        lambda: NativeEnvironment(Path(sys.executable), "windows-x64", {"python_version": "3.11"}),
+    )
     monkeypatch.setattr(dev, "run_blender", fake_run)
     for variable in dev._BLENDER_ENVIRONMENT_OVERRIDES:
         monkeypatch.setenv(variable, "parent-value")
@@ -244,7 +249,11 @@ def test_run_replaces_runtime_from_seed_each_time(
     seed.mkdir()
     marker = seed / "marker.txt"
     marker.write_text("first", encoding="utf-8")
-    monkeypatch.setattr(dev, "current_platform", lambda: "linux-x64")
+    monkeypatch.setattr(
+        dev,
+        "capture_native_environment",
+        lambda: NativeEnvironment(Path(sys.executable), "linux-x64", {"python_version": "3.11"}),
+    )
     monkeypatch.setattr(dev, "run_blender", lambda *_args, **_kwargs: 0)
 
     args = _args(root, executable, user_resources=str(seed))
@@ -265,7 +274,11 @@ def test_run_validates_disabled_feature_options_before_launch(
     root = tmp_path / "project"
     _write_project(root)
     executable = _fake_executable(root / "fake-blender")
-    monkeypatch.setattr(dev, "current_platform", lambda: "linux-x64")
+    monkeypatch.setattr(
+        dev,
+        "capture_native_environment",
+        lambda: NativeEnvironment(Path(sys.executable), "linux-x64", {"python_version": "3.11"}),
+    )
     with pytest.raises(BlexError, match="host or port"):
         dev.run(_args(root, executable, debugpy_host="127.0.0.1"))
     with pytest.raises(BlexError, match="refresh-wheels"):
@@ -283,7 +296,11 @@ def test_run_validates_enabled_values_and_verbose_output(
     (root / ".python-version").write_text("3.11\n", encoding="utf-8")
     seed = tmp_path / "seed"
     seed.mkdir()
-    monkeypatch.setattr(dev, "current_platform", lambda: "linux-x64")
+    monkeypatch.setattr(
+        dev,
+        "capture_native_environment",
+        lambda: NativeEnvironment(Path(sys.executable), "linux-x64", {"python_version": "3.11"}),
+    )
     monkeypatch.setattr(dev, "run_blender", lambda *_args, **_kwargs: 0)
 
     assert (

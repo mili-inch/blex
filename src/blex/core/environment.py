@@ -6,8 +6,34 @@ import os
 import platform
 import sys
 import sysconfig
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
 
 from blex.core.errors import BlexError
+
+
+@dataclass(frozen=True)
+class NativeEnvironment:
+    """A captured interpreter target shared by deployment and Wheel resolution."""
+
+    python_executable: Path
+    platform_name: str
+    runtime: Mapping[str, str]
+
+    @property
+    def python_version(self) -> str:
+        return self.runtime["python_version"]
+
+
+def capture_native_environment() -> NativeEnvironment:
+    """Read the host environment once at the command boundary."""
+    return NativeEnvironment(
+        python_executable=Path(sys.executable),
+        platform_name=current_platform(),
+        runtime=MappingProxyType(resolution_environment()),
+    )
 
 
 def current_python_version() -> str:
