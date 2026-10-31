@@ -270,7 +270,7 @@ hidden files and `__pycache__`; manifest `paths_exclude_pattern` entries are not
 used as copy filters. `blex stage` does not start Blender, run Blender's Extension
 build command, or create a ZIP archive.
 
-## Package builds
+## Package builds and CI
 
 blex uses Hatchling as its PEP 517 build backend. Build its sdist and Wheel with:
 
@@ -278,6 +278,13 @@ blex uses Hatchling as its PEP 517 build backend. Build its sdist and Wheel with
 python -m pip install build
 python -m build
 ```
+
+The repository CI uses `actions/setup-python` and pip. Its Windows x64, macOS x64,
+and Linux x64 matrix runs Python 3.11 and 3.14 tests, stages a sample Extension,
+and uploads each environment's source tree separately. A package job builds and
+uploads the blex distributions. For an Extension project's CI, select the
+required runner/Python pairs, install blex into each environment, run
+`python -m blex stage`, and collect `dist/pyX.Y/<platform>/source/`.
 
 ## Contributing
 

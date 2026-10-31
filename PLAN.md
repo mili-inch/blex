@@ -103,7 +103,7 @@ dev = [
 
 - authorsおよびproject URLsは設定しない。
 - リポジトリルートにGPLv3全文の`LICENSE`を配置する。
-- 開発用の`uv.lock`をコミットする。uvはcontributor環境の管理にのみ使用でき、runtime・build backendの必須依存にはしない。
+- 開発用の`uv.lock`をコミットする。uvはcontributor環境の管理にのみ使用でき、runtime・build backend・CIの必須依存にはしない。
 - build frontendはPyPA `build`とし、`python -m build`でsdistとWheelを作成する。
 - sdistとWheelにはtemplates、同梱Wheel、licenseを含める。sdistからも同じ資源を含むWheelをbuildできる。
 - distribution versionは`importlib.metadata.version("blex")`から取得する。
@@ -1309,7 +1309,9 @@ GitHub Actionsで次を実行する。
 
 - Windows x64、macOS x64、Linux x64
 - Python 3.11と3.14のtest matrix
-- lock済みdependencyによるtest
+- `actions/setup-python`でPythonを選択し、pipでpackageとdev dependency groupをinstallする。
+- 各matrixでtestとサンプルExtensionのnative stageを実行し、生成したsource treeをartifactとして保存する。
+- 別jobで`python -m build`を実行し、sdistとWheelをartifactとして保存する。
 - 別jobでRuff format、Ruff lint、Pyrefly
 - Windows ARM64、macOS ARM64、Wheel target Platformはmockを用いたunit test
 - 実Blender downloadおよび実Blender testなし
