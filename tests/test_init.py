@@ -14,6 +14,34 @@ from blex.commands import init as init_command
 from blex.core.errors import BlexError, InitError
 
 
+@pytest.mark.parametrize("kind", ("pyproject", "manifest"))
+def test_merge_keeps_input_unchanged_across_independent_generations(kind: str) -> None:
+    original = '# preserve this comment\ncustom = "kept"\n[unrelated]\nvalue = 42\n'
+    document = tomlkit.parse(original)
+    for name in ("first", "second"):
+        if kind == "pyproject":
+            result = init_command._merge_pyproject(
+                document,
+                project_name=name,
+                description="A project",
+                source_relative=f"src/{name}",
+            )
+            parsed = tomlkit.parse(result.decode("utf-8"))
+            assert parsed["project"]["name"] == name
+            assert parsed["tool"]["blex"]["source-dir"] == f"src/{name}"
+        else:
+            result = init_command._merge_manifest(
+                document, extension_id=name, display_name=name.title()
+            )
+            parsed = tomlkit.parse(result.decode("utf-8"))
+            assert parsed["id"] == name
+            assert parsed["name"] == name.title()
+        assert tomlkit.dumps(document) == original
+        assert parsed["custom"] == "kept"
+        assert parsed["unrelated"]["value"] == 42
+        assert b"# preserve this comment" in result
+
+
 def _args(directory: Path, **overrides: object) -> argparse.Namespace:
     values: dict[str, object] = {
         "directory": str(directory),

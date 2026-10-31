@@ -251,6 +251,7 @@ def _merge_pyproject(
     description: str,
     source_relative: str,
 ) -> bytes:
+    document = tomlkit.parse(tomlkit.dumps(document))
     root = cast(MutableMapping[str, object], document)
     project = _ensure_table(root, "project", "[project]")
     project_defaults: tuple[tuple[str, object], ...] = (
@@ -296,6 +297,7 @@ def _merge_pyproject(
 
 
 def _merge_manifest(document: TOMLDocument, *, extension_id: str, display_name: str) -> bytes:
+    document = tomlkit.parse(tomlkit.dumps(document))
     root = cast(MutableMapping[str, object], document)
     defaults: tuple[tuple[str, object], ...] = (
         ("schema_version", "1.0.0"),
