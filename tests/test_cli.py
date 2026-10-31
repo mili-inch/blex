@@ -11,6 +11,28 @@ from blex.cli import create_parser, parse_args
 from blex.core.errors import BlexError
 
 
+@pytest.mark.parametrize("command", ("dev", "stage"))
+def test_commands_reject_dangling_managed_gitignore(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    root = tmp_path / "project"
+    assert main_module.main(["init", str(root)]) == 0
+    managed = root / ".blex"
+    managed.mkdir()
+    ignore = managed / ".gitignore"
+    external = tmp_path / "missing-ignore"
+    try:
+        ignore.symlink_to(external)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+
+    assert main_module.main([command, str(root), "--no-wheels"]) == 1
+    assert "symlink" in capsys.readouterr().err
+    assert ignore.is_symlink()
+    assert not external.exists()
+    assert list(managed.iterdir()) == [ignore]
+
+
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert main_module.main(["--version"]) == 0
     assert capsys.readouterr().out == "blex 0.1.0\n"

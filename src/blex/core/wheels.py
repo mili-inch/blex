@@ -24,6 +24,8 @@ from blex.core.cache import (
     write_cache_metadata,
 )
 from blex.core.errors import BlexError
+from blex.core.filesystem import ensure_blex_root, ensure_managed_directory, remove_managed_tree
+from blex.core.project import is_symlink_or_reparse
 
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
@@ -202,8 +204,8 @@ def _resolve_cached_target(
 
     with FileLock(lock_path, "Wheel cache"):
         had_entry = entry.exists()
-        if had_entry or _is_link_or_reparse(entry):
-            if _is_link_or_reparse(entry):
+        if had_entry or is_symlink_or_reparse(entry):
+            if is_symlink_or_reparse(entry):
                 raise BlexError(
                     f"Wheel cache entry must not be a symlink or reparse point: {entry}"
                 )
@@ -270,7 +272,7 @@ def _resolve_cached_target(
                         backup=backup,
                         had_entry=had_entry,
                     )
-                elif temporary.exists() or _is_link_or_reparse(temporary):
+                elif temporary.exists() or is_symlink_or_reparse(temporary):
                     remove_managed_tree(project_root, temporary)
             except Exception as rollback_exc:
                 raise BlexError(
@@ -308,7 +310,7 @@ def _freeze_wheels(project_root: Path, wheels: Sequence[CachedWheel]) -> tuple[C
         ensure_managed_directory(project_root, lock.parent)
         target = directory / wheel.filename
         with FileLock(lock, "Wheel object"):
-            if _is_link_or_reparse(target):
+            if is_symlink_or_reparse(target):
                 raise BlexError(f"immutable Wheel object must not be a symlink: {target}")
             if target.exists():
                 if not target.is_file() or sha256_file(target) != wheel.sha256:
@@ -338,11 +340,11 @@ def _rollback_cache_replacement(
 ) -> None:
     """Restore the pre-update cache state from the paths that actually exist."""
 
-    entry_exists = entry.exists() or _is_link_or_reparse(entry)
-    backup_exists = backup is not None and (backup.exists() or _is_link_or_reparse(backup))
+    entry_exists = entry.exists() or is_symlink_or_reparse(entry)
+    backup_exists = backup is not None and (backup.exists() or is_symlink_or_reparse(backup))
     if backup_exists:
         if entry_exists:
-            if temporary.exists() or _is_link_or_reparse(temporary):
+            if temporary.exists() or is_symlink_or_reparse(temporary):
                 raise BlexError(
                     "cannot roll back Wheel cache update: both the installed entry "
                     f"and temporary path exist: {entry}, {temporary}"
@@ -357,14 +359,14 @@ def _rollback_cache_replacement(
                 f"and its backup are missing: {entry}"
             )
     elif entry_exists:
-        if temporary.exists() or _is_link_or_reparse(temporary):
+        if temporary.exists() or is_symlink_or_reparse(temporary):
             raise BlexError(
                 "cannot roll back Wheel cache update: both the installed entry "
                 f"and temporary path exist: {entry}, {temporary}"
             )
         entry.rename(temporary)
 
-    if temporary.exists() or _is_link_or_reparse(temporary):
+    if temporary.exists() or is_symlink_or_reparse(temporary):
         remove_managed_tree(project_root, temporary)
 
 
@@ -379,78 +381,3 @@ def _merge_artifacts(artifacts: Sequence[WheelArtifact]) -> tuple[WheelArtifact,
             continue
         merged[key] = artifact
     return tuple(merged[key] for key in sorted(merged))
-
-
-def ensure_blex_root(project_root: Path) -> None:
-    """Create the managed root and its required ignore file, without following links."""
-    blex_root = project_root / ".blex"
-    if _is_link_or_reparse(blex_root) or (blex_root.exists() and not blex_root.is_dir()):
-        raise BlexError(f"managed .blex path must be a regular directory: {blex_root}")
-    blex_root.mkdir(exist_ok=True)
-    ignore_path = blex_root / ".gitignore"
-    required = ("*", "!.gitignore")
-    if _is_link_or_reparse(ignore_path):
-        raise BlexError(f"managed .blex ignore path must not be a symlink: {ignore_path}")
-    if ignore_path.exists():
-        if _is_link_or_reparse(ignore_path) or not ignore_path.is_file():
-            raise BlexError(f"managed .blex ignore path is invalid: {ignore_path}")
-        try:
-            existing_text = ignore_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
-            raise BlexError(f"cannot read managed ignore file: {ignore_path}") from error
-        lines = existing_text.splitlines()
-        missing = [line for line in required if line not in lines]
-        if missing:
-            separator = "" if not existing_text or existing_text.endswith(("\n", "\r")) else "\n"
-            ignore_path.write_text(
-                existing_text + separator + "\n".join(missing) + "\n",
-                encoding="utf-8",
-                newline="\n",
-            )
-    else:
-        ignore_path.write_text("*\n!.gitignore\n", encoding="utf-8", newline="\n")
-
-
-def ensure_managed_directory(project_root: Path, directory: Path) -> None:
-    """Create a directory strictly below ``.blex`` after validating each component."""
-    managed_root = project_root / ".blex"
-    try:
-        directory.relative_to(managed_root)
-    except ValueError as error:
-        raise BlexError(f"managed path escapes .blex: {directory}") from error
-    relative = directory.relative_to(managed_root)
-    current = managed_root
-    for part in relative.parts:
-        current = current / part
-        if _is_link_or_reparse(current):
-            raise BlexError(f"managed directory must not be a symlink: {current}")
-        if current.exists() and not current.is_dir():
-            raise BlexError(f"managed directory path is not a directory: {current}")
-        current.mkdir(exist_ok=True)
-
-
-def remove_managed_tree(project_root: Path, target: Path) -> None:
-    """Remove a real entry only after proving its parent is below ``.blex``."""
-    managed_root = (project_root / ".blex").resolve(strict=True)
-    try:
-        resolved_parent = target.parent.resolve(strict=True)
-        resolved_parent.relative_to(managed_root)
-    except (OSError, RuntimeError, ValueError) as error:
-        raise BlexError(f"refusing to remove path outside managed .blex root: {target}") from error
-    if _is_link_or_reparse(target):
-        raise BlexError(f"refusing to recursively remove a managed symlink: {target}")
-    if target.is_dir():
-        shutil.rmtree(target)
-    elif target.is_file():
-        target.unlink()
-    else:
-        raise BlexError(f"managed path is not a removable file or directory: {target}")
-
-
-def _is_link_or_reparse(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    try:
-        return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x0400)
-    except FileNotFoundError:
-        return False

@@ -15,6 +15,8 @@ import tomlkit
 
 from blex.commands import dev
 from blex.core.errors import BlexError
+from blex.core.cache import FileLock, sha256_file
+from blex.core.filesystem import ensure_blex_root, ensure_managed_directory
 from blex.core.manifest import load_manifest
 from blex.core.wheels import WheelArtifact
 
@@ -134,7 +136,7 @@ def _runtime_inputs(
 ) -> tuple[dev._RuntimeInputs, Path, Path]:
     root = tmp_path / "project"
     source = _write_project(root)
-    blex_root = dev._ensure_managed_root(root)
+    blex_root = ensure_blex_root(root)
     manual = source / "vendor" / "manual.whl"
     manual.parent.mkdir()
     manual.write_bytes(b"manual")
@@ -144,12 +146,12 @@ def _runtime_inputs(
         WheelArtifact(
             automatic,
             PurePosixPath("wheels", "automatic.whl"),
-            dev._hash_file(automatic),
+            sha256_file(automatic),
         ),
         WheelArtifact(
             manual,
             PurePosixPath("vendor", "manual.whl"),
-            dev._hash_file(manual),
+            sha256_file(manual),
         ),
     )
     inputs = dev._RuntimeInputs(
@@ -631,16 +633,23 @@ def test_runtime_creation_with_long_windows_project_path(tmp_path: Path) -> None
     ).is_file()
 
 
-def test_dev_lock_is_nonblocking_and_reusable(tmp_path: Path) -> None:
+def test_dev_lock_is_nonblocking_and_reusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "project"
-    root.mkdir()
-    with dev._DevLock(root):
-        with pytest.raises(BlexError, match="holds the project lock"):
-            with dev._DevLock(root):
-                pass
-    with dev._DevLock(root):
+    _write_project(root)
+    executable = _fake_executable(root / "blender")
+    blex_root = ensure_blex_root(root)
+    lock_path = blex_root / "locks" / "dev.lock"
+    ensure_managed_directory(root, lock_path.parent)
+    with FileLock(lock_path, "dev"):
+        with pytest.raises(BlexError, match="already running"):
+            dev.run(_args(root, executable))
+    monkeypatch.setattr(dev, "run_blender", lambda command, *, environment: 0)
+    assert dev.run(_args(root, executable, link_mode="copy")) == 0
+    with FileLock(lock_path, "dev"):
         pass
-    assert (root / ".blex" / "locks" / "dev.lock").is_file()
+    assert lock_path.is_file()
 
 
 def test_managed_gitignore_is_merged_without_replacement(tmp_path: Path) -> None:
@@ -649,7 +658,7 @@ def test_managed_gitignore_is_merged_without_replacement(tmp_path: Path) -> None
     managed.mkdir(parents=True)
     ignore = managed / ".gitignore"
     ignore.write_text("custom\n*\n", encoding="utf-8")
-    assert dev._ensure_managed_root(root) == managed
+    assert ensure_blex_root(root) == managed
     assert ignore.read_text(encoding="utf-8") == "custom\n*\n!.gitignore\n"
 
 
@@ -664,13 +673,13 @@ def test_managed_path_guards_fail_before_mutating_unexpected_paths(tmp_path: Pat
     outside.mkdir()
     with pytest.raises(BlexError, match="outside managed root"):
         dev._safe_remove_tree(outside, managed_root=managed)
-    assert dev._is_link_like(tmp_path / "absent") is False
+    assert dev.is_symlink_or_reparse(tmp_path / "absent") is False
     dev._safe_remove_tree(managed / "absent", managed_root=managed)
 
     ignore = managed / ".gitignore"
     ignore.mkdir()
-    with pytest.raises(BlexError, match="not a regular file"):
-        dev._ensure_blex_gitignore(managed)
+    with pytest.raises(BlexError, match="ignore path is invalid"):
+        ensure_blex_root(tmp_path)
 
 
 def test_input_seed_and_deployment_validation_errors(tmp_path: Path) -> None:
@@ -690,8 +699,8 @@ def test_input_seed_and_deployment_validation_errors(tmp_path: Path) -> None:
     dev._validate_seed(None, root / ".blex" / "runtime_environment")
     with pytest.raises(BlexError, match="must not contain each other"):
         dev._validate_seed(root, root / ".blex" / "runtime_environment")
-    with pytest.raises(BlexError, match="could not hash"):
-        dev._hash_file(root / "missing")
+    with pytest.raises(FileNotFoundError):
+        sha256_file(root / "missing")
     with pytest.raises(AssertionError, match="deployment mode"):
         dev._place_source_entry(file_path, root / "placed", mode="invalid")
     with pytest.raises(BlexError, match="invalid Wheel deployment path"):

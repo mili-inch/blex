@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import importlib
 import os
 import shutil
 import stat
@@ -13,8 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path, PurePosixPath
-from types import TracebackType
-from typing import Any, BinaryIO, Self
+from typing import Any
 
 from tomlkit import dumps
 
@@ -24,11 +21,16 @@ from blex.adapters.blender import (
     resolve_blender_executable,
     run_blender,
 )
+from blex.core.cache import FileLock, sha256_file
+from blex.core.config import select_value
 from blex.core.environment import current_platform
+from blex.core.filesystem import ensure_blex_root, ensure_managed_directory
 from blex.core.errors import BlexError
 from blex.core.manifest import ManifestData, load_manifest, update_manifest_for_target
 from blex.core.project import (
     derive_names,
+    is_strict_descendant,
+    is_symlink_or_reparse,
     load_pyproject,
     resolve_project_root,
     resolve_source_dir,
@@ -68,26 +70,6 @@ def _lexists(path: Path) -> bool:
     return os.path.lexists(path)
 
 
-def _is_link_like(path: Path) -> bool:
-    try:
-        path_stat = path.lstat()
-    except FileNotFoundError:
-        return False
-    if stat.S_ISLNK(path_stat.st_mode):
-        return True
-    attributes = getattr(path_stat, "st_file_attributes", 0)
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    return bool(attributes & reparse_flag)
-
-
-def _strict_descendant(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return path != root
-
-
 def _managed_absolute(path: Path) -> Path:
     return Path(os.path.abspath(path))
 
@@ -95,7 +77,7 @@ def _managed_absolute(path: Path) -> Path:
 def _validate_managed_directory(path: Path, *, label: str) -> None:
     if not _lexists(path):
         return
-    if _is_link_like(path):
+    if is_symlink_or_reparse(path):
         raise BlexError(f"{label} must not be a symlink or reparse point: {path}")
     if not path.is_dir():
         raise BlexError(f"{label} is not a directory: {path}")
@@ -106,7 +88,7 @@ def _safe_remove_tree(path: Path, *, managed_root: Path) -> None:
         return
     absolute_path = _managed_absolute(path)
     absolute_root = _managed_absolute(managed_root)
-    if not _strict_descendant(absolute_path, absolute_root):
+    if not is_strict_descendant(absolute_path, absolute_root):
         raise BlexError(f"refusing to remove path outside managed root: {absolute_path}")
     _validate_managed_directory(path, label="managed removal target")
     shutil.rmtree(path)
@@ -131,103 +113,6 @@ def _atomic_write_text(path: Path, text: str) -> None:
     finally:
         if _lexists(temporary):
             temporary.unlink()
-
-
-def _ensure_blex_gitignore(blex_root: Path) -> None:
-    gitignore = blex_root / ".gitignore"
-    required = ("*", "!.gitignore")
-    if not gitignore.exists():
-        _atomic_write_text(gitignore, "\n".join(required))
-        return
-    if _is_link_like(gitignore) or not gitignore.is_file():
-        raise BlexError(f"managed .gitignore is not a regular file: {gitignore}")
-    try:
-        original = gitignore.read_bytes()
-        decoded = original.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise BlexError(f"could not read managed .gitignore: {gitignore}") from exc
-    lines = decoded.splitlines()
-    missing = [pattern for pattern in required if pattern not in lines]
-    if not missing:
-        return
-    separator = b"" if not original or original.endswith((b"\n", b"\r")) else b"\n"
-    updated = original + separator + ("\n".join(missing) + "\n").encode()
-    temporary = _temporary_path(gitignore.parent)
-    try:
-        temporary.write_bytes(updated)
-        os.replace(temporary, gitignore)
-    finally:
-        if _lexists(temporary):
-            temporary.unlink()
-
-
-def _ensure_managed_root(project_root: Path) -> Path:
-    blex_root = project_root / ".blex"
-    _validate_managed_directory(blex_root, label="managed .blex directory")
-    blex_root.mkdir(exist_ok=True)
-    _ensure_blex_gitignore(blex_root)
-    return blex_root
-
-
-class _DevLock:
-    def __init__(self, project_root: Path) -> None:
-        self._project_root = project_root
-        self._stream: BinaryIO | None = None
-        self._locking_module: Any | None = None
-
-    def __enter__(self) -> Self:
-        blex_root = _ensure_managed_root(self._project_root)
-        locks = blex_root / "locks"
-        _validate_managed_directory(locks, label="managed lock directory")
-        locks.mkdir(exist_ok=True)
-        lock_path = locks / "dev.lock"
-        if _lexists(lock_path) and _is_link_like(lock_path):
-            raise BlexError(f"dev lock must not be a symlink or reparse point: {lock_path}")
-        stream = lock_path.open("a+b")
-        self._stream = stream
-        try:
-            if os.name == "nt":
-                locking_module: Any = importlib.import_module("msvcrt")
-                stream.seek(0, os.SEEK_END)
-                if stream.tell() == 0:
-                    stream.write(b"\0")
-                    stream.flush()
-                stream.seek(0)
-                locking_module.locking(stream.fileno(), locking_module.LK_NBLCK, 1)
-            else:
-                locking_module = importlib.import_module("fcntl")
-                locking_module.flock(
-                    stream.fileno(), locking_module.LOCK_EX | locking_module.LOCK_NB
-                )
-        except OSError as exc:
-            stream.close()
-            self._stream = None
-            raise BlexError(
-                f"another blex dev process holds the project lock: {lock_path}"
-            ) from exc
-        self._locking_module = locking_module
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        stream = self._stream
-        locking_module = self._locking_module
-        if stream is None or locking_module is None:
-            return
-        try:
-            if os.name == "nt":
-                stream.seek(0)
-                locking_module.locking(stream.fileno(), locking_module.LK_UNLCK, 1)
-            else:
-                locking_module.flock(stream.fileno(), locking_module.LOCK_UN)
-        finally:
-            stream.close()
-            self._stream = None
-            self._locking_module = None
 
 
 def _resolve_input_path(
@@ -255,7 +140,11 @@ def _resolve_input_path(
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
-    return first == second or _strict_descendant(first, second) or _strict_descendant(second, first)
+    return (
+        first == second
+        or is_strict_descendant(first, second)
+        or is_strict_descendant(second, first)
+    )
 
 
 def _validate_seed(seed: Path | None, runtime_root: Path) -> None:
@@ -319,17 +208,6 @@ def _create_symlink(source: Path, destination: Path) -> None:
         raise _SymlinkFailure(f"could not create symlink {destination}: {exc}") from exc
 
 
-def _hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError as exc:
-        raise BlexError(f"could not hash file: {path}") from exc
-    return digest.hexdigest()
-
-
 def _place_source_entry(source: Path, destination: Path, *, mode: str) -> None:
     if mode == "symlink":
         _create_symlink(source, destination)
@@ -355,7 +233,7 @@ def _ensure_real_parents(path: Path, *, stop: Path) -> None:
         missing.append(current)
         current = current.parent
     if current != stop:
-        if _is_link_like(current):
+        if is_symlink_or_reparse(current):
             raise BlexError(f"Wheel destination parent is a symlink: {current}")
         if not current.is_dir():
             raise BlexError(f"Wheel destination parent is not a directory: {current}")
@@ -371,7 +249,7 @@ def _place_artifact(
 ) -> None:
     destination = _artifact_destination(extension_root, artifact.relative_path)
     if _lexists(destination):
-        if not destination.is_file() or _hash_file(destination) != artifact.sha256:
+        if not destination.is_file() or sha256_file(destination) != artifact.sha256:
             raise BlexError(f"Wheel conflicts with deployed source entry: {artifact.relative_path}")
         return
     _ensure_real_parents(destination.parent, stop=extension_root)
@@ -611,7 +489,7 @@ def _prepare_debugpy(blex_root: Path) -> Path:
     if resource.name != _DEBUGPY_WHEEL:
         raise BlexError(f"unexpected bundled debugpy artifact: {resource.name}")
     with resources.as_file(resource) as wheel:
-        if _hash_file(wheel) != _DEBUGPY_SHA256:
+        if sha256_file(wheel) != _DEBUGPY_SHA256:
             raise BlexError(f"bundled debugpy Wheel hash mismatch: {wheel}")
         temporary = debugpy_root / f".{_DEBUGPY_VERSION}.{uuid.uuid4().hex}.tmp"
         try:
@@ -684,7 +562,7 @@ def _write_bootstrap(
     _validate_managed_directory(bootstrap_directory, label="managed bootstrap directory")
     bootstrap_directory.mkdir(exist_ok=True)
     script = bootstrap_directory / "dev.py"
-    if _lexists(script) and (_is_link_like(script) or not script.is_file()):
+    if _lexists(script) and (is_symlink_or_reparse(script) or not script.is_file()):
         raise BlexError(f"managed bootstrap script is not a regular file: {script}")
     repository_root = runtime_root / "extensions" / _REPOSITORY_MODULE
     rendered = _render_bootstrap(
@@ -699,14 +577,6 @@ def _write_bootstrap(
     )
     _atomic_write_text(script, rendered)
     return script.resolve(strict=True)
-
-
-def _selected(cli_value: Any | None, configured_value: Any | None, default: Any) -> Any:
-    if cli_value is not None:
-        return cli_value
-    if configured_value is not None:
-        return configured_value
-    return default
 
 
 def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
@@ -727,12 +597,12 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
     manifest = load_manifest(source_dir)
 
     platform_name = current_platform()
-    link_mode: str = _selected(args.link_mode, config.dev.link_mode, "auto")
-    reload_panel: bool = _selected(args.reload_panel, config.dev.reload_panel, True)
-    debugpy_enabled: bool = _selected(args.debugpy, config.dev.debugpy, False)
-    debugpy_host: str = _selected(args.debugpy_host, config.dev.debugpy_host, "127.0.0.1")
-    debugpy_port: int = _selected(args.debugpy_port, config.dev.debugpy_port, 5678)
-    automatic_wheels: bool = _selected(args.wheels, config.dev.wheels, True)
+    link_mode: str = select_value(args.link_mode, config.dev.link_mode, "auto")
+    reload_panel: bool = select_value(args.reload_panel, config.dev.reload_panel, True)
+    debugpy_enabled: bool = select_value(args.debugpy, config.dev.debugpy, False)
+    debugpy_host: str = select_value(args.debugpy_host, config.dev.debugpy_host, "127.0.0.1")
+    debugpy_port: int = select_value(args.debugpy_port, config.dev.debugpy_port, 5678)
+    automatic_wheels: bool = select_value(args.wheels, config.dev.wheels, True)
     if not debugpy_host.strip():
         raise BlexError("debugpy host must not be empty")
     if type(debugpy_port) is not int or not 1 <= debugpy_port <= 65535:
@@ -743,7 +613,7 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
         raise BlexError("--refresh-wheels cannot be used while automatic Wheels are disabled")
 
     blend_file: Path | None = None
-    blend_value = _selected(args.blend_file, config.dev.blend_file, None)
+    blend_value = select_value(args.blend_file, config.dev.blend_file, None)
     if blend_value is not None:
         blend_file = _resolve_input_path(
             project_root,
@@ -752,7 +622,7 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
             directory=False,
         )
     seed: Path | None = None
-    seed_value = _selected(args.user_resources, config.dev.user_resources, None)
+    seed_value = select_value(args.user_resources, config.dev.user_resources, None)
     if seed_value is not None:
         seed = _resolve_input_path(
             project_root,
@@ -761,7 +631,7 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
             directory=True,
         )
 
-    blender_value: str = _selected(args.blender, config.blender, "blender")
+    blender_value: str = select_value(args.blender, config.blender, "blender")
     if not blender_value:
         raise BlexError("Blender executable must not be empty")
     blender = resolve_blender_executable(blender_value, project_root)
@@ -776,7 +646,7 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
         verbose=args.verbose,
     )
 
-    blex_root = _ensure_managed_root(project_root)
+    blex_root = project_root / ".blex"
     runtime_root = blex_root / "runtime_environment"
     _validate_managed_directory(runtime_root, label="managed runtime directory")
     _validate_seed(seed, runtime_root)
@@ -830,7 +700,10 @@ def _run_locked(args: argparse.Namespace, project_root: Path) -> int:
 def run(args: argparse.Namespace) -> int:
     try:
         project_root = resolve_project_root(args.directory, must_exist=True)
-        with _DevLock(project_root):
+        blex_root = ensure_blex_root(project_root)
+        lock_path = blex_root / "locks" / "dev.lock"
+        ensure_managed_directory(project_root, lock_path.parent)
+        with FileLock(lock_path, "dev"):
             return _run_locked(args, project_root)
     except BlexError:
         raise

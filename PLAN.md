@@ -127,6 +127,7 @@ src/blex/
 │   ├── manifest.py
 │   ├── config.py
 │   ├── environment.py
+│   ├── filesystem.py
 │   ├── wheels.py
 │   ├── cache.py
 │   └── errors.py

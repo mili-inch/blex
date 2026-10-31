@@ -28,13 +28,12 @@ from blex.core.project import (
     resolve_source_dir,
     validate_source_tree,
 )
-from blex.core.wheels import (
-    WheelArtifact,
+from blex.core.filesystem import (
     ensure_blex_root,
     ensure_managed_directory,
     remove_managed_tree,
-    resolve_wheels,
 )
+from blex.core.wheels import WheelArtifact, resolve_wheels
 
 
 @dataclass

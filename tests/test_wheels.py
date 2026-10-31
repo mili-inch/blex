@@ -23,7 +23,7 @@ from blex.core.cache import (
     write_cache_metadata,
 )
 from blex.core.errors import BlexError
-from blex.core import wheels
+from blex.core import wheels, filesystem
 
 _RUNTIME = {"python_full_version": "3.11.9"}
 
@@ -242,13 +242,13 @@ def test_managed_gitignore_rejects_dangling_link_without_external_write(tmp_path
     except OSError as error:
         pytest.skip(f"symlinks unavailable: {error}")
     with pytest.raises(BlexError, match="symlink"):
-        wheels.ensure_blex_root(root)
+        filesystem.ensure_blex_root(root)
     assert not external.exists()
     assert (root / ".blex" / ".gitignore").is_symlink()
 
 
 def test_immutable_wheel_rejects_corruption(tmp_path: Path) -> None:
-    wheels.ensure_blex_root(tmp_path)
+    filesystem.ensure_blex_root(tmp_path)
     original = tmp_path / "wheel.whl"
     original.write_bytes(b"wheel")
     cached = CachedWheel(original, original.name, sha256_file(original))
@@ -750,7 +750,7 @@ def test_refresh_rejects_reparse_cache_entry_before_download(
     entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
     entry.mkdir(parents=True)
 
-    monkeypatch.setattr(wheels, "_is_link_or_reparse", lambda path: path == entry)
+    monkeypatch.setattr(wheels, "is_symlink_or_reparse", lambda path: path == entry)
 
     def unexpected_download(*args: object, **kwargs: object) -> tuple[CachedWheel, ...]:
         pytest.fail("download must not start for a reparse cache entry")
@@ -799,40 +799,40 @@ def test_failed_download_removes_temporary_cache_entry(
 
 
 def test_managed_directory_helpers(tmp_path: Path) -> None:
-    wheels.ensure_blex_root(tmp_path)
+    filesystem.ensure_blex_root(tmp_path)
     ignore = tmp_path / ".blex" / ".gitignore"
     ignore.write_text("custom", encoding="utf-8")
-    wheels.ensure_blex_root(tmp_path)
+    filesystem.ensure_blex_root(tmp_path)
     assert ignore.read_text(encoding="utf-8") == "custom\n*\n!.gitignore\n"
 
     managed_directory = tmp_path / ".blex" / "work" / "nested"
-    wheels.ensure_managed_directory(tmp_path, managed_directory)
+    filesystem.ensure_managed_directory(tmp_path, managed_directory)
     managed_file = managed_directory / "temporary"
     managed_file.write_bytes(b"data")
-    wheels.remove_managed_tree(tmp_path, managed_file)
+    filesystem.remove_managed_tree(tmp_path, managed_file)
     assert not managed_file.exists()
-    wheels.remove_managed_tree(tmp_path, tmp_path / ".blex" / "work")
+    filesystem.remove_managed_tree(tmp_path, tmp_path / ".blex" / "work")
     assert not managed_directory.exists()
 
     with pytest.raises(BlexError, match="escapes"):
-        wheels.ensure_managed_directory(tmp_path, tmp_path / "outside")
+        filesystem.ensure_managed_directory(tmp_path, tmp_path / "outside")
     with pytest.raises(BlexError, match="outside"):
-        wheels.remove_managed_tree(tmp_path, tmp_path / "outside")
+        filesystem.remove_managed_tree(tmp_path, tmp_path / "outside")
     with pytest.raises(BlexError, match="removable"):
-        wheels.remove_managed_tree(tmp_path, tmp_path / ".blex" / "missing")
+        filesystem.remove_managed_tree(tmp_path, tmp_path / ".blex" / "missing")
 
 
 def test_managed_roots_reject_files(tmp_path: Path) -> None:
     (tmp_path / ".blex").write_bytes(b"file")
     with pytest.raises(BlexError, match="regular directory"):
-        wheels.ensure_blex_root(tmp_path)
+        filesystem.ensure_blex_root(tmp_path)
 
 
 def test_managed_directory_rejects_file_component(tmp_path: Path) -> None:
-    wheels.ensure_blex_root(tmp_path)
+    filesystem.ensure_blex_root(tmp_path)
     (tmp_path / ".blex" / "blocked").write_bytes(b"file")
     with pytest.raises(BlexError, match="not a directory"):
-        wheels.ensure_managed_directory(tmp_path, tmp_path / ".blex" / "blocked" / "child")
+        filesystem.ensure_managed_directory(tmp_path, tmp_path / ".blex" / "blocked" / "child")
 
 
 def test_fingerprint_tracks_runtime_and_interpreter(tmp_path: Path) -> None:
