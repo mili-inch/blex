@@ -235,7 +235,7 @@ Manifest IDは次の手順で生成する。
 - blexが扱う対象Pythonバージョン自体には下限を設けない。
 - `init --python`の反復指定はエラーにする。
 - `.python-version`は環境構築ツール・CIが使用するための情報であり、`dev`と`stage`は読み取らない。
-- `dev`と`stage`は実行中のPythonを使用し、stageのPython directory名は`sys.version_info`から`py<major>.<minor>`として生成する。
+- `dev`と`stage`は実行中のPythonを使用する。stageの出力pathはPythonバージョンに依存しない。
 
 ### 4.5 Pathの解決と安全性
 
@@ -321,7 +321,7 @@ wheels = true
 - CLIで`--debugpy-host`または`--debugpy-port`を明示したにもかかわらず、最終的なdebugpyが無効ならエラーにする。
 - 最終的なwheelsが無効なとき、`--refresh-wheels`の明示指定はエラーにする。
 - `dev --no-wheels`ではpipを実行しない。
-- `stage --no-wheels`でも実行中のPythonとPlatformを出力pathと生成Manifestに使用するが、pipは実行しない。
+- `stage --no-wheels`でも現在のPlatformを生成Manifestに使用するが、pipは実行しない。
 
 ## 6. 共通CLI規約
 
@@ -786,7 +786,7 @@ blexは依存関係resolverを実装せず、pipの公開CLIへ委ねる。requi
 ### 9.3 対象Python
 
 `dev`と`stage`はblexを実行しているPythonだけを対象にする。
-`sys.executable`をpipの実行に使い、`sys.version_info`のmajor/minorを出力pathに使う。
+`sys.executable`をpipの実行に使い、実行環境のPythonバージョンをcacheの識別に使う。
 Python指定optionや設定、`.python-version`の読み取り、別Pythonの探索・取得は行わない。
 Blender実行ファイルからのPython検出も行わない。
 利用者は対象Blenderに対応するPython環境でblexを実行する。
@@ -827,7 +827,7 @@ blex自身の互換タグ一覧やmacOS/glibcの固定baselineは設けない。
 
 1回のstageは現在のPython・Platformのsource treeだけを作成する。
 生成Manifestのplatformsはそのtreeの1 Platformだけとする。
-他のPython・Platformの出力と依存集合を混在させず、それらの既存出力を保持する。
+出力先は常に`<output-dir>/source/`とする。複数環境の成果物を共存させる場合は、別の作業領域または`--output-dir`を明示して分ける。
 
 ### 9.8 手書きWheel path
 
@@ -1161,10 +1161,10 @@ output-dirはCLI`--output-dir`、`[tool.blex.stage].output-dir`、組み込み�
 - `.blex`と同一、`.blex`の祖先、`.blex`の子孫ではない。
 - project root直下の`.git`と同一、`.git`の祖先、`.git`の子孫ではない。
 - project rootからoutput-dirまでの既存componentがsymlinkではない。
-- 現在の`pyX.Y/<platform>` targetがsymlinkではない。
+- `<output-dir>/source`がsymlinkではない。
 - output-dirまたは選択targetが存在する通常fileならエラーにする。
 
-blexが削除・置換できるのは、現在環境の`<output-dir>/pyX.Y/<platform>`とblex自身の一時・backup directoryだけとする。他のPython・Platformのstaging treeとその他のfileは変更しない。
+blexが削除・置換できるのは、`<output-dir>/source`とblex自身の一時・backup directoryだけとする。output-dir内の他のfile・directoryは変更しない。
 
 ### 11.4 staging構造
 
@@ -1172,15 +1172,13 @@ blexが削除・置換できるのは、現在環境の`<output-dir>/pyX.Y/<plat
 
 ```text
 <output-dir>/
-└── py3.11/
-    └── windows-x64/
-        └── source/
-            ├── blender_manifest.toml
-            ├── <Extension source entries>
-            └── wheels/
+└── source/
+    ├── blender_manifest.toml
+    ├── <Extension source entries>
+    └── wheels/
 ```
 
-- stage IDは`pyX.Y/<platform>`とし、現在環境のPlatform directory全体を置換する。
+- `source/` directory全体を現在環境向けの内容で置換する。
 - source-dir全体を実fileとしてcopyする。
 - 内部symlinkは第4.2節を検証した上で実体化する。
 - 元Manifestをcopy後に生成Manifestで置き換える。
@@ -1198,7 +1196,7 @@ blexが削除・置換できるのは、現在環境の`<output-dir>/pyX.Y/<plat
 
 stage command全体を1 transactionとして扱う。
 
-1. UUID4の小文字32桁hexを`run-id`とし、`.blex/staging/stage/<run-id>`の`prepared/source`で現在環境のsource treeを完成させる。
+1. UUID4の小文字32桁hexを`run-id`とし、`.blex/staging/stage/<run-id>`の`prepared`で現在環境のsource treeを完成させる。
 2. 現在環境のvalidation、Wheel取得、copy、Manifest生成が成功するまでoutput-dirを変更しない。
 3. `.blex/staging/stage/<run-id>/transaction.json`へ対象、既存targetのbackup path、commit進捗を記録する。
 4. 選択targetの既存directoryをtransaction内の`backup`へrenameする。
@@ -1326,7 +1324,7 @@ GitHub Actionsで次を実行する。
 - 本仕様の3コマンドと全optionが実装されている。
 - runtimeとcacheが`.blex`以下だけに配置される。
 - Manifest schema defaultが`1.0.0`、Manifest version defaultが`1.0.0`である。
-- stageは現在の`pyX.Y/<platform>`だけをtransactionで置換し、他環境の出力を保持する。
+- stageは`<output-dir>/source`だけをtransactionで置換し、output-dir内の他のfile・directoryを保持する。
 - `dev`と`stage`の依存解決を実行中のPythonのpipに固定し、runtimeにuvを必要としない。
 - source Manifestを`dev`または`stage`が変更しない。
 - `stage`がBlenderを実行せず、stagingを保持する。

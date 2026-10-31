@@ -81,7 +81,7 @@ def test_stage_creates_final_source_without_changing_original(tmp_path: Path) ->
 
     assert stage.run(_args(root)) == 0
 
-    target = root / "dist" / "py3.11" / "windows-x64" / "source"
+    target = root / "dist" / "source"
     assert (target / "__init__.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert (target / ".hidden").is_file()
     assert (target / "__pycache__" / "kept.pyc").is_file()
@@ -105,19 +105,19 @@ def test_configured_source_does_not_derive_an_unused_default(tmp_path: Path) -> 
     )
 
     assert stage.run(_args(root)) == 0
-    assert (root / "dist" / "py3.11" / "windows-x64" / "source" / "blender_manifest.toml").is_file()
+    assert (root / "dist" / "source" / "blender_manifest.toml").is_file()
 
 
 def test_restage_replaces_selected_output(tmp_path: Path) -> None:
     root, _source = _project(tmp_path)
     assert stage.run(_args(root)) == 0
-    marker = root / "dist" / "py3.11" / "windows-x64" / "old.txt"
+    marker = root / "dist" / "source" / "old.txt"
     marker.write_text("replace", encoding="utf-8")
 
     assert stage.run(_args(root)) == 0
 
     assert not marker.exists()
-    assert (root / "dist" / "py3.11" / "windows-x64" / "source").is_dir()
+    assert (root / "dist" / "source").is_dir()
 
 
 def test_stage_uses_current_platform_and_verbose_output(
@@ -161,7 +161,7 @@ def test_stage_rejects_output_and_selected_target_files(tmp_path: Path) -> None:
     with pytest.raises(BlexError, match="output-dir"):
         stage.run(_args(root, output_dir="blocked"))
 
-    target = root / "dist" / "py3.11" / "windows-x64"
+    target = root / "dist" / "source"
     target.parent.mkdir(parents=True)
     target.write_bytes(b"file")
     with pytest.raises(BlexError, match="selected stage target"):
@@ -201,17 +201,14 @@ def test_commit_failure_rolls_back_existing_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, _source = _project(tmp_path)
-    old_target = root / "dist" / "py3.11" / "windows-x64"
+    old_target = root / "dist" / "source"
     old_target.mkdir(parents=True)
     old_marker = old_target / "old.txt"
     old_marker.write_text("original", encoding="utf-8")
     original_write = stage._write_transaction
-    calls = 0
 
     def fail_after_install(run_root: Path, state: stage._TargetState) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 3:
+        if state.state == "installed":
             raise OSError("simulated transaction record failure")
         original_write(run_root, state)
 
@@ -220,7 +217,7 @@ def test_commit_failure_rolls_back_existing_target(
         stage.run(_args(root))
 
     assert old_marker.read_text(encoding="utf-8") == "original"
-    assert not (old_target / "source").exists()
+    assert list(old_target.iterdir()) == [old_marker]
     assert list((root / ".blex" / "staging" / "stage").iterdir()) == []
 
 
@@ -235,7 +232,7 @@ def test_interrupt_after_commit_rename_restores_original_state(
     transition: str,
 ) -> None:
     root, _source = _project(tmp_path)
-    target = root / "dist" / "py3.11" / "windows-x64"
+    target = root / "dist" / "source"
     marker = target / "old.txt"
     if existing_target:
         target.mkdir(parents=True)
@@ -263,7 +260,7 @@ def test_interrupt_after_commit_rename_restores_original_state(
     assert interrupted is True
     if existing_target:
         assert marker.read_text(encoding="utf-8") == "original"
-        assert not (target / "source").exists()
+        assert list(target.iterdir()) == [marker]
     else:
         assert not target.exists()
     assert list((root / ".blex" / "staging" / "stage").iterdir()) == []
@@ -317,7 +314,7 @@ def test_prepare_target_copies_an_automatic_wheel(tmp_path: Path) -> None:
         artifacts=(artifact,),
     )
 
-    assert (prepared / "source" / "wheels" / "automatic.whl").read_bytes() == b"automatic"
+    assert (prepared / "wheels" / "automatic.whl").read_bytes() == b"automatic"
 
 
 def test_rollback_refuses_a_missing_installed_target(tmp_path: Path) -> None:
@@ -325,24 +322,62 @@ def test_rollback_refuses_a_missing_installed_target(tmp_path: Path) -> None:
     run_root = root / ".blex" / "staging" / "stage" / ("a" * 32)
     run_root.mkdir(parents=True)
     state = stage._TargetState(
-        python="3.11",
-        identifier="py3.11",
-        target=root / "dist" / "py3.11",
-        prepared=run_root / "prepared" / "py3.11",
-        backup=run_root / "backups" / "py3.11",
+        target=root / "dist" / "source",
+        prepared=run_root / "prepared",
+        backup=run_root / "backup",
         state="installed",
     )
-    with pytest.raises(BlexError, match="py3.11"):
+    with pytest.raises(BlexError, match="prepared"):
         stage._rollback(root, run_root, state)
 
 
-def test_native_stage_ignores_version_file_and_preserves_other_environments(tmp_path: Path) -> None:
+@pytest.mark.parametrize("output", ["dist", "release/windows"])
+def test_stage_reuses_source_path_across_environments_and_preserves_siblings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str
+) -> None:
     root, _source = _project(tmp_path, python="not-a-version")
-    preserved = [root / "dist" / "py3.12", root / "dist" / "py3.11" / "linux-x64"]
-    for target in preserved:
-        target.mkdir(parents=True)
-        (target / "owned.txt").write_text("keep", encoding="utf-8")
-    assert stage.run(_args(root)) == 0
-    assert (root / "dist" / "py3.11" / "windows-x64" / "source").is_dir()
-    for target in preserved:
-        assert (target / "owned.txt").read_text(encoding="utf-8") == "keep"
+    output_dir = root / output
+    sibling = output_dir / "notes" / "owned.txt"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("keep", encoding="utf-8")
+    archive = output_dir / "extension.zip"
+    archive.write_bytes(b"archive")
+    args = _args(root, output_dir=None if output == "dist" else output)
+    assert stage.run(args) == 0
+    target = output_dir / "source"
+    stale = target / "stale.whl"
+    stale.write_bytes(b"stale")
+    monkeypatch.setattr(
+        stage,
+        "capture_native_environment",
+        lambda: NativeEnvironment(Path("python"), "linux-x64", {"python_version": "3.14"}),
+    )
+    assert stage.run(args) == 0
+    assert not stale.exists()
+    manifest = tomlkit.parse((target / "blender_manifest.toml").read_text(encoding="utf-8"))
+    assert manifest["platforms"] == ["linux-x64"]
+    assert {path.name for path in output_dir.iterdir()} == {"source", "notes", "extension.zip"}
+    assert sibling.read_text(encoding="utf-8") == "keep"
+    assert archive.read_bytes() == b"archive"
+
+
+@pytest.mark.parametrize("dangling", [False, True])
+def test_stage_rejects_source_output_symlink(tmp_path: Path, dangling: bool) -> None:
+    root, _source = _project(tmp_path)
+    outside = tmp_path / "outside"
+    if not dangling:
+        outside.mkdir()
+        (outside / "owned.txt").write_bytes(b"keep")
+    target = root / "dist" / "source"
+    target.parent.mkdir()
+    try:
+        target.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    with pytest.raises(BlexError, match="symlink"):
+        stage.run(_args(root))
+    assert target.is_symlink()
+    if not dangling:
+        assert (outside / "owned.txt").read_bytes() == b"keep"
+    else:
+        assert not outside.exists()

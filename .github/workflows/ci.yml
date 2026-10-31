@@ -28,7 +28,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: stage-py${{ matrix.python }}-${{ matrix.target.platform }}
-          path: stage-smoke/dist/py${{ matrix.python }}/${{ matrix.target.platform }}/source/
+          path: stage-smoke/dist/source/
           if-no-files-found: error
           include-hidden-files: true
 

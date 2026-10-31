@@ -72,7 +72,7 @@ def _project(root: Path, dependencies: list[str]) -> Path:
 
 
 def _staged_source(root: Path) -> Path:
-    return root / "dist" / f"py{current_python_version()}" / current_platform() / "source"
+    return root / "dist" / "source"
 
 
 def test_stage_resolves_native_direct_transitive_and_extra_markers(
@@ -168,7 +168,7 @@ def test_failed_native_resolution_preserves_existing_stage(
     make_wheel(local_index, "foreignonly", tag="cp999-cp999-unavailable")
     root = tmp_path / "project"
     _project(root, ["foreignonly"])
-    target = _staged_source(root).parent
+    target = _staged_source(root)
     target.mkdir(parents=True)
     marker = target / "previous.txt"
     marker.write_text("keep", encoding="utf-8")

@@ -22,7 +22,7 @@ blex stage
 ```
 
 Run `blex <command> --help` for all command-specific options. `blex stage`
-creates a staging tree for the running Python and platform under `dist/`; packaging it as a final
+creates a staging tree for the running Python and platform at `dist/source/`; packaging it as a final
 Blender Extension archive is deliberately left to the caller.
 
 ## Project conventions
@@ -246,22 +246,20 @@ blex stage [DIRECTORY]
     [--refresh-wheels]
 ```
 
-Run `blex stage` in each target environment. For example, Python 3.11 on
-Windows x64 produces:
+Run `blex stage` in each target environment. The output layout is:
 
 ```text
 dist/
-└── py3.11/
-    └── windows-x64/
-        └── source/
-            ├── blender_manifest.toml
-            ├── <Extension source entries>
-            └── wheels/
+└── source/
+    ├── blender_manifest.toml
+    ├── <Extension source entries>
+    └── wheels/
 ```
 
-Only the current `pyX.Y/<platform>` directory is replaced, as one transaction.
-Other Python and platform trees are preserved. The generated manifest declares
-one platform. Native Wheel compatibility comes from the executing environment;
+Only `<output-dir>/source/` is replaced, as one transaction. Other files and
+directories in the output directory are preserved. Use separate workspaces or
+`--output-dir` values to keep multiple environments' outputs. The generated
+manifest declares one platform. Native Wheel compatibility comes from the executing environment;
 choose CI runners or containers compatible with your distribution's minimum OS
 requirements and Blender's Python and architecture.
 
@@ -284,7 +282,7 @@ and Linux x64 matrix runs Python 3.11 and 3.14 tests, stages a sample Extension,
 and uploads each environment's source tree separately. A package job builds and
 uploads the blex distributions. For an Extension project's CI, select the
 required runner/Python pairs, install blex into each environment, run
-`python -m blex stage`, and collect `dist/pyX.Y/<platform>/source/`.
+`python -m blex stage`, and collect `dist/source/`.
 
 ## Contributing
 

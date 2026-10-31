@@ -38,8 +38,6 @@ from blex.core.wheels import WheelArtifact, resolve_wheels
 
 @dataclass
 class _TargetState:
-    python: str
-    identifier: str
     target: Path
     prepared: Path
     backup: Path
@@ -89,12 +87,10 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
         raise BlexError("--refresh-wheels cannot be used with --no-wheels")
 
     native = capture_native_environment()
-    python_version = native.python_version
-    platform_name = native.platform_name
     environment = dict(os.environ)
     output_value = select_value(args.output_dir, project.config.stage.output_dir, "dist")
     output_dir = _resolve_output_dir(root, source_dir, output_value)
-    target = output_dir / f"py{python_version}" / platform_name
+    target = output_dir / "source"
     _validate_existing_components(target)
     if target.exists() and not target.is_dir():
         raise BlexError(f"selected stage target is not a directory: {target}")
@@ -103,13 +99,11 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
         print(f"project root: {root}")
         print(f"source-dir: {source_dir}")
         print(f"output-dir: {output_dir}")
-        print(f"Python: {python_version}")
-        print(f"Platform: {platform_name}")
+        print(f"Python: {native.python_version}")
+        print(f"Platform: {native.platform_name}")
 
     run_root = staging_parent / uuid.uuid4().hex
     state = _TargetState(
-        python=python_version,
-        identifier=f"py{python_version}/{platform_name}",
         target=target,
         prepared=run_root / "prepared",
         backup=run_root / "backup",
@@ -132,7 +126,7 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
             source_dir=source_dir,
             prepared=state.prepared,
             manifest_document=manifest.document,
-            platforms=(platform_name,),
+            platforms=(native.platform_name,),
             artifacts=artifacts,
         )
         _write_transaction(run_root, state)
@@ -152,7 +146,7 @@ def _run_locked(args: argparse.Namespace, root: Path) -> None:
         raise
 
     remove_managed_tree(root, run_root)
-    print(f"Built {state.identifier}: {state.target}")
+    print(f"Built staging source: {state.target}")
 
 
 def _prepare_target(
@@ -163,20 +157,19 @@ def _prepare_target(
     platforms: tuple[str, ...],
     artifacts: tuple[WheelArtifact, ...],
 ) -> None:
-    source_target = prepared / "source"
     prepared.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(source_dir, source_target, symlinks=False, copy_function=shutil.copy2)
+        shutil.copytree(source_dir, prepared, symlinks=False, copy_function=shutil.copy2)
     except (OSError, shutil.Error) as error:
         raise BlexError(f"failed to copy Extension source into staging: {error}") from error
 
-    wheels_directory = source_target / "wheels"
+    wheels_directory = prepared / "wheels"
     if wheels_directory.exists() and not wheels_directory.is_dir():
         raise BlexError(f"Extension wheels path is not a directory: {wheels_directory}")
     wheels_directory.mkdir(exist_ok=True)
 
     for artifact in artifacts:
-        destination = source_target.joinpath(*artifact.relative_path.parts)
+        destination = prepared.joinpath(*artifact.relative_path.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             if not destination.is_file() or destination.is_symlink():
@@ -199,7 +192,7 @@ def _prepare_target(
     manifest_text = tomlkit.dumps(generated_manifest).replace("\r\n", "\n").replace("\r", "\n")
     if not manifest_text.endswith("\n"):
         manifest_text += "\n"
-    (source_target / "blender_manifest.toml").write_text(
+    (prepared / "blender_manifest.toml").write_text(
         manifest_text,
         encoding="utf-8",
         newline="\n",
@@ -259,7 +252,6 @@ def _transaction_payload(run_root: Path, state: _TargetState) -> dict[str, objec
     return {
         "format": 1,
         "run_id": run_root.name,
-        "python": state.python,
         "target": state.target.as_posix(),
         "prepared": state.prepared.as_posix(),
         "backup": state.backup.as_posix(),
