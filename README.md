@@ -218,7 +218,10 @@ are not supported.
 
 `--no-wheels` disables automatic collection. Wheels explicitly listed in the
 source manifest are still validated and included. Downloaded Wheels are cached
-under `.blex/wheels`. Deployments reference immutable copies under
+under `.blex/wheels/<fingerprint>/`. The fingerprint includes dependency inputs
+and the execution environment, so different environments keep separate cache
+entries. Locks use `.blex/locks/wheels/<fingerprint>.lock`. Deployments reference
+immutable copies under
 `.blex/wheel-objects`, so refreshing the cache cannot break a running Blender
 session. These objects are retained until `.blex` is manually removed with all
 dev/stage processes stopped. Use `--refresh-wheels` to re-resolve unchanged dependency

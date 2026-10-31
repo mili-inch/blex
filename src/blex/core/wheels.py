@@ -190,8 +190,8 @@ def _resolve_cached_target(
         environment,
         runtime=runtime,
     )
-    entry = cache_entry_path(project_root, python_version, platform_name, fingerprint)
-    lock_path = cache_lock_path(project_root, python_version, platform_name, fingerprint)
+    entry = cache_entry_path(project_root, fingerprint)
+    lock_path = cache_lock_path(project_root, fingerprint)
     ensure_blex_root(project_root)
     ensure_managed_directory(project_root, entry.parent)
     ensure_managed_directory(project_root, lock_path.parent)

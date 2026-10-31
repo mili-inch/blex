@@ -17,6 +17,7 @@ from blex.core.cache import (
     CachedWheel,
     FileLock,
     cache_entry_path,
+    cache_lock_path,
     sha256_file,
     validate_cache_entry,
     wheel_fingerprint,
@@ -526,7 +527,7 @@ def test_cache_hit_corruption_and_refresh(tmp_path: Path, monkeypatch: pytest.Mo
         runtime=_RUNTIME,
         environment=_PROCESS_ENVIRONMENT,
     )
-    entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
+    entry = cache_entry_path(tmp_path, fingerprint)
     assert "must-not-be-persisted" not in (entry / "metadata.json").read_text(encoding="utf-8")
     (entry / first[0].source.name).write_bytes(b"corrupt")
     with pytest.raises(BlexError, match="hash mismatch"):
@@ -649,7 +650,7 @@ def test_cache_refresh_rolls_back_interrupt_after_real_rename(
         runtime=_RUNTIME,
         environment=_PROCESS_ENVIRONMENT,
     )
-    entry = cache_entry_path(tmp_path, python_version, platform_name, fingerprint)
+    entry = cache_entry_path(tmp_path, fingerprint)
     original_rename = Path.rename
     interrupted = False
 
@@ -741,9 +742,9 @@ def test_cache_temporary_creation_interrupt_cleans_created_directory(
         )
 
     assert interrupted is True
-    cache_parent = tmp_path / ".blex" / "wheels" / "py3.11" / "windows-x64"
+    cache_parent = tmp_path / ".blex" / "wheels"
     assert not list(cache_parent.glob(".tmp-*"))
-    assert not cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint).exists()
+    assert not cache_entry_path(tmp_path, fingerprint).exists()
 
 
 def test_cache_backup_cleanup_failure_keeps_installed_entry(
@@ -803,7 +804,7 @@ def test_cache_backup_cleanup_failure_keeps_installed_entry(
         runtime=_RUNTIME,
         environment=_PROCESS_ENVIRONMENT,
     )
-    entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
+    entry = cache_entry_path(tmp_path, fingerprint)
     assert (entry / "demo-1-py3-none-any.whl").read_bytes() == b"new"
     backups = list(entry.parent.glob(".backup-*"))
     assert len(backups) == 1
@@ -826,7 +827,7 @@ def test_refresh_rejects_reparse_cache_entry_before_download(
         runtime=_RUNTIME,
         environment=_PROCESS_ENVIRONMENT,
     )
-    entry = cache_entry_path(tmp_path, "3.11", "windows-x64", fingerprint)
+    entry = cache_entry_path(tmp_path, fingerprint)
     entry.mkdir(parents=True)
 
     monkeypatch.setattr(wheels, "is_symlink_or_reparse", lambda path: path == entry)
@@ -878,7 +879,7 @@ def test_failed_download_removes_temporary_cache_entry(
             native=_NATIVE,
             environment=_PROCESS_ENVIRONMENT,
         )
-    cache_parent = tmp_path / ".blex" / "wheels" / "py3.11" / "windows-x64"
+    cache_parent = tmp_path / ".blex" / "wheels"
     assert list(cache_parent.iterdir()) == []
 
 
@@ -928,3 +929,94 @@ def test_fingerprint_tracks_runtime_and_interpreter(tmp_path: Path) -> None:
     first = fingerprint({"python_full_version": "3.11.1"}, tmp_path / "python")
     assert first != fingerprint({"python_full_version": "3.11.2"}, tmp_path / "python")
     assert first != fingerprint({"python_full_version": "3.11.1"}, tmp_path / "other-python")
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        NativeEnvironment(_NATIVE.python_executable, "linux-x64", _RUNTIME),
+        NativeEnvironment(
+            _NATIVE.python_executable,
+            "windows-x64",
+            {
+                "python_version": "3.14",
+                "python_full_version": "3.14.0",
+            },
+        ),
+        NativeEnvironment(
+            _NATIVE.python_executable,
+            "windows-x64",
+            {
+                **_RUNTIME,
+                "python_full_version": "3.11.10",
+            },
+        ),
+    ],
+    ids=["platform", "python-version", "runtime"],
+)
+def test_flat_cache_separates_environments_and_locks_by_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other: NativeEnvironment
+) -> None:
+    source = _source(tmp_path)
+    downloads = 0
+    monkeypatch.setattr(wheels, "get_pip_version", lambda _path, *, environment, verbose: "pip 99")
+
+    def download(
+        executable: Path,
+        *,
+        dependencies: tuple[str, ...],
+        destination: Path,
+        environment: Mapping[str, str],
+        verbose: bool,
+    ) -> tuple[CachedWheel, ...]:
+        nonlocal downloads
+        downloads += 1
+        path = destination / "demo.whl"
+        path.write_bytes(b"wheel")
+        return (CachedWheel(path, path.name, sha256_file(path)),)
+
+    monkeypatch.setattr(wheels, "download_wheels", download)
+
+    def resolve(native: NativeEnvironment) -> tuple[wheels.WheelArtifact, ...]:
+        return wheels.resolve_wheels(
+            project_root=tmp_path,
+            source_dir=source,
+            wheel_paths=(),
+            dependencies=("demo",),
+            native=native,
+            environment={},
+            automatic=True,
+            refresh=False,
+        )
+
+    def fingerprint(native: NativeEnvironment) -> str:
+        return wheel_fingerprint(
+            ("demo",),
+            native.python_version,
+            native.platform_name,
+            native.python_executable,
+            "pip 99",
+            {},
+            runtime=native.runtime,
+        )
+
+    first = resolve(_NATIVE)
+    first_key = fingerprint(_NATIVE)
+    other_key = fingerprint(other)
+    assert first_key != other_key
+    with FileLock(cache_lock_path(tmp_path, first_key), "Wheel cache"):
+        with pytest.raises(BlexError, match="already running"):
+            resolve(_NATIVE)
+        assert resolve(other) == first
+    assert resolve(_NATIVE) == first
+    assert resolve(other) == first
+    assert downloads == 2
+    parent = tmp_path / ".blex" / "wheels"
+    assert {path.name for path in parent.iterdir()} == {first_key, other_key}
+    locks = tmp_path / ".blex" / "locks" / "wheels"
+    assert {path.name for path in locks.iterdir()} == {f"{first_key}.lock", f"{other_key}.lock"}
+    for native, key in [(_NATIVE, first_key), (other, other_key)]:
+        metadata = json.loads((parent / key / "metadata.json").read_text(encoding="utf-8"))
+        assert metadata["python"] == native.python_version
+        assert metadata["platform"] == native.platform_name
+        assert metadata["runtime"] == dict(native.runtime)

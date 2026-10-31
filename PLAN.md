@@ -851,17 +851,16 @@ cache layoutは次とする。
 
 ```text
 .blex/wheels/
-└── py3.11/
-    └── windows-x64/
-        └── <fingerprint>/
-            ├── metadata.json
-            └── *.whl
+└── <fingerprint>/
+    ├── metadata.json
+    └── *.whl
 ```
 
 fingerprintは、解決方式format 1、順序を保持したdependency文字列、Python、Platform、Python実行path、pip version、runtime情報、全`PIP_*`環境変数の名前と値からcanonical JSONを作り、そのSHA-256とする。runtime情報にはPEP 508の全marker値、Python build、sysconfig Platform、SOABI、libc、macOS versionを含める。
 
 - `PIP_*`の値はfingerprint計算にだけ使用し、`metadata.json`やlogへ保存しない。
 - pip設定fileの内容はfingerprintへ含めない。pip設定fileだけを変更した場合は`--refresh-wheels`を必要とする。
+- 環境の区別はfingerprintに含め、cache pathとlock pathにPython・Platformのdirectory階層を設けない。
 - 同じfingerprintは期限なしで再利用する。
 - index上で未固定dependencyの新versionが公開されてもfingerprintは変化しないため、自動更新しない。更新には`--refresh-wheels`を使用する。
 - `--refresh-wheels`は対象fingerprintを再取得し、成功後に原子的に置き換える。
@@ -869,7 +868,7 @@ fingerprintは、解決方式format 1、順序を保持したdependency文字列
 - metadata欠落、不正JSON、file欠落、hash不一致、予期しないfileはcache破損として明示的なエラーにする。
 - cache破損時に通常実行でrepairしない。`--refresh-wheels`だけが置換を許可する。
 - cache更新は一時directoryで完了させてからrenameする。
-- fingerprint単位にOS file lockを取得し、待機せず競合エラーにする。
+- `.blex/locks/wheels/<fingerprint>.lock`でfingerprint単位にOS file lockを取得し、待機せず競合エラーにする。
 - Windowsでは`msvcrt`、POSIXでは`fcntl`を使用し、外部lock libraryを追加しない。
 
 `metadata.json`の論理形式は次とする。dependency配列は入力順を保持し、Wheel配列はfilename順とする。
@@ -1229,16 +1228,16 @@ blexがproject内で管理する領域は次のとおりとする。
 │   ├── wheel-objects/
 │   │   └── <sha256>.lock
 │   └── wheels/
-│       └── py3.11/
-│           └── windows-x64/
-│               └── <fingerprint>.lock
+│       └── <fingerprint>.lock
 ├── wheel-objects/
 │   └── <sha256>/<filename>
 ├── runtime_environment/
 ├── staging/
 │   └── stage/
 └── wheels/
-    └── <Python・Platform・fingerprint別cache entry>
+    └── <fingerprint>/
+        ├── metadata.json
+        └── *.whl
 ```
 
 - directoryは必要になった時だけ作る。

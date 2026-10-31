@@ -131,30 +131,12 @@ class FileLock:
             self._stream = None
 
 
-def cache_entry_path(
-    project_root: Path,
-    python_version: str,
-    platform_name: str,
-    fingerprint: str,
-) -> Path:
-    return project_root / ".blex" / "wheels" / f"py{python_version}" / platform_name / fingerprint
+def cache_entry_path(project_root: Path, fingerprint: str) -> Path:
+    return project_root / ".blex" / "wheels" / fingerprint
 
 
-def cache_lock_path(
-    project_root: Path,
-    python_version: str,
-    platform_name: str,
-    fingerprint: str,
-) -> Path:
-    return (
-        project_root
-        / ".blex"
-        / "locks"
-        / "wheels"
-        / f"py{python_version}"
-        / platform_name
-        / f"{fingerprint}.lock"
-    )
+def cache_lock_path(project_root: Path, fingerprint: str) -> Path:
+    return project_root / ".blex" / "locks" / "wheels" / f"{fingerprint}.lock"
 
 
 def validate_cache_entry(
